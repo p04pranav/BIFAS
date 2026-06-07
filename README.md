@@ -1,6 +1,6 @@
 # BIFAS — Band Incorporated Finance Analytics System
 
-A high-performance, multi-agent financial and cryptocurrency analysis platform powered by **MiMo-V2.5pro** and orchestrated through **Band.ai** shared rooms.
+A standalone, multi-agent financial and cryptocurrency analysis platform powered by **MiMo-V2.5pro** with an in-memory collaboration layer.
 
 ---
 
@@ -8,7 +8,7 @@ A high-performance, multi-agent financial and cryptocurrency analysis platform p
 
 BIFAS is a dynamic, multi-agent system that deploys specialized AI analysts to dissect financial queries in real time. Rather than relying on a single LLM response, BIFAS assembles a custom team of domain experts for each query — from trend analysis to on-chain data interpretation — then synthesizes their findings into a pristine executive report.
 
-The entire pipeline is orchestrated sequentially by Streamlit, with agent collaboration logged in a shared Band room for full transparency and auditability.
+The entire pipeline is orchestrated sequentially by Streamlit, with agent collaboration logged in a local in-memory room for full transparency and auditability. **No external platform dependencies required.**
 
 ---
 
@@ -22,25 +22,26 @@ The entire pipeline is orchestrated sequentially by Streamlit, with agent collab
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   THE ARCHITECT (MiMo)                      │
-│          Analyzes query → Returns agent topology            │
+│                   THE ARCHITECT (mimo-v2.5)                  │
+│          Analyzes query → Returns agent topology (JSON)      │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                  BAND.SHARED ROOM                            │
-│              (Collaboration & Message Log)                   │
-│                                                             │
-│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│   │  Agent 1  │→│  Agent 2  │→│  Agent 3  │→│Synthesizer│  │
-│   └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
-│        Each agent reads room history, queries MiMo,         │
-│           and posts findings back to the room               │
+│                  LOCAL BAND SDK (In-Memory)                   │
+│              (Collaboration & Message Log)                    │
+│                                                              │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│   │  Agent 1  │→│  Agent 2  │→│  Agent 3  │→│Synthesizer│   │
+│   └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+│     (mimo-v2.5-pro)                                          │
+│     Each agent reads room history, queries MiMo,             │
+│        and posts findings back to the room                   │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    THE AUDITOR (MiMo)                        │
+│                    THE AUDITOR (mimo-v2.5-pro)                │
 │          Reviews final report → APPROVED / REJECTED          │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -49,12 +50,20 @@ The entire pipeline is orchestrated sequentially by Streamlit, with agent collab
 
 BIFAS does **not** use background bots, websockets, or async threads. Streamlit acts as the puppeteer:
 
-1. Streamlit queries MiMo-V2.5pro
-2. Posts the response to the Band room
-3. Reads the updated room history
-4. Passes it to the next agent in sequence
+1. Streamlit queries MiMo (Architect) to generate agent topology
+2. Posts the query to the LocalBandSDK room
+3. For each agent: reads room history → queries MiMo → posts response
+4. Auditor reviews the final report
 
 This ensures deterministic execution, full observability, and zero race conditions.
+
+### Dual-Model Strategy
+
+| Component | Model | Reason |
+|-----------|-------|--------|
+| **The_Architect** | `mimo-v2.5` | Reliable JSON output for routing |
+| **Specialist Agents** | `mimo-v2.5-pro` | Higher quality analysis and reasoning |
+| **The_Auditor** | `mimo-v2.5-pro` | Thorough review of final reports |
 
 ---
 
@@ -79,8 +88,8 @@ The team is assembled dynamically per query. Not every query needs every agent.
 | Component | Technology |
 |-----------|------------|
 | **UI** | Streamlit |
-| **LLM** | MiMo-V2.5pro (via OpenAI-compatible API) |
-| **Coordination** | Band SDK (shared rooms) |
+| **LLM** | MiMo-V2.5pro / MiMo-V2.5 (via OpenAI-compatible API) |
+| **Coordination** | LocalBandSDK (in-memory room simulation) |
 | **Language** | Python 3.12+ |
 | **Config** | python-dotenv |
 
@@ -94,19 +103,20 @@ BIFAS/
 ├── .env                  # API keys (not committed)
 ├── .gitignore            # Ignored files
 ├── config.py             # Environment loader + MiMo client setup
-├── bifas_agents.py       # Agent persona definitions (system prompts)
-├── engine.py             # Sequential orchestration pipeline
+├── bifas_agents.py       # Agent persona definitions + routing template
+├── engine.py             # LocalBandSDK + Sequential orchestration pipeline
 ├── app.py                # Streamlit UI
+├── TEST_REPORT.md        # Comprehensive test results
 └── README.md             # This file
 ```
 
 ### File Descriptions
 
-- **`config.py`** — Loads `MIMO_API_KEY` and `BAND_API_KEY` from `.env`. Instantiates the OpenAI client pointing to `https://token-plan-sgp.xiaomimimo.com/v1`.
+- **`config.py`** — Loads `MIMO_API_KEY` from `.env`. Instantiates the OpenAI client pointing to `https://token-plan-sgp.xiaomimimo.com/v1`.
 
-- **`bifas_agents.py`** — Contains `BIFAS_PERSONAS`, a dictionary mapping agent names to their system prompts. No execution logic.
+- **`bifas_agents.py`** — Contains `BIFAS_PERSONAS` (agent system prompts) and `ARCHITECT_USER_TEMPLATE` (routing instruction). No execution logic.
 
-- **`engine.py`** — The brain. `run_bifas_pipeline(user_query)` executes the full sequential flow: topology generation → room init → collaboration loop → audit.
+- **`engine.py`** — The brain. Contains `LocalBandSDK` class (in-memory room simulation) and `run_bifas_pipeline(user_query)` which executes the full sequential flow: topology generation → room init → collaboration loop → audit.
 
 - **`app.py`** — Streamlit frontend with a dark enterprise terminal aesthetic. Handles user input, triggers the pipeline, and renders results in a two-column layout.
 
@@ -117,8 +127,7 @@ BIFAS/
 ### Prerequisites
 
 - Python 3.10+
-- A MiMo-V2.5pro API key
-- A Band.ai API key
+- A MiMo API key (from Xiaomi MiMo platform)
 
 ### Installation
 
@@ -134,7 +143,6 @@ Create a `.env` file in the project root:
 
 ```env
 MIMO_API_KEY=your_mimo_api_key_here
-BAND_API_KEY=your_band_api_key_here
 ```
 
 ### Run
@@ -153,7 +161,7 @@ streamlit run app.py
    - `Compare ETH volume trends with market sentiment`
    - `Is XRP showing accumulation patterns on-chain?`
 3. Click **Initialize BIFAS Run**
-4. Watch as the Architect assembles your team, agents collaborate in the Band room, and the Auditor validates the final report
+4. Watch as the Architect assembles your team, agents collaborate in the room, and the Auditor validates the final report
 
 ---
 
@@ -169,6 +177,18 @@ Analyze BTC vs SOL price spikes and determine if SOL is decoupling from BTC corr
 3. OnChain_Sleuth
 4. Sentiment_Reader
 5. Synthesizer
+
+---
+
+## Test Results
+
+See [TEST_REPORT.md](TEST_REPORT.md) for comprehensive test results.
+
+**Summary:**
+- ✅ LocalBandSDK unit tests — all pass
+- ✅ JSON extraction — handles all formats
+- ✅ Full pipeline — end-to-end success
+- ✅ Audit validation — reports APPROVED
 
 ---
 
