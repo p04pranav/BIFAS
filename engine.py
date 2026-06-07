@@ -121,7 +121,7 @@ def generate_agent_squad(user_query):
             {"role": "system", "content": ORCHESTRATOR_GENERATOR_PROMPT},
             {"role": "user", "content": f"Design an optimal agent squad (max {MAX_AGENTS} agents) for this query:\n\n{user_query}"}
         ],
-        max_tokens=2000
+        max_tokens=4000
     )
     raw = response.choices[0].message.content.strip()
 
