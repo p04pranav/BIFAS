@@ -1,23 +1,23 @@
 import json
 import re
-from collections import deque
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import client
 from bifas_agents import (
-    ORCHESTRATOR_GENERATOR_PROMPT,
-    ORCHESTRATOR_DIVERSITY_DIRECTIVE,
+    ORCHESTRATOR_DECOMPOSITION_PROMPT,
+    AGENT_TASK_PROMPT,
     ORCHESTRATOR_SYNTHESIS_PROMPT,
-    AGENT_SPEAK_PROMPT,
+    AUDITOR_PROMPT,
     DEPTH_CONFIG
 )
 
 MODEL = "mimo-v2.5-pro"
 ORCHESTRATOR_MODEL = "mimo-v2.5"
 
-# Adaptive Guardrail Constants
-MAX_TURNS = 11  # Hard cap: 5-min budget / 2 calls per turn
-MAX_AGENTS = 8
-LOOP_DETECTION_WINDOW = 4
-LOOP_INJECTION = "[SYSTEM]: The conversation is looping. Resolve conflicts and conclude."
+# Sprint Architecture Constants
+TIMEOUT_SECONDS = 300  # 5-minute hard timeout
+MAX_AGENTS = 12
+RETRY_COUNT = 1  # Retry failed agents once
 
 
 def extract_json_from_response(raw_text):
@@ -78,13 +78,13 @@ class LocalBandSDK:
     def get_room_history(self, room_id):
         return self.rooms[room_id]["messages"]
 
-    def get_history_formatted(self, room_id, max_chars=2000):
+    def get_history_formatted(self, room_id, max_chars=3000):
         history = self.get_room_history(room_id)
         formatted = []
         total = 0
         for msg in reversed(history):
             prefix = f"[{msg['type'].upper()}]" if msg.get('type') else ""
-            entry = f"{prefix} {msg['sender']}: {msg['text'][:300]}"
+            entry = f"{prefix} {msg['sender']}: {msg['text'][:500]}"
             if total + len(entry) > max_chars:
                 break
             formatted.insert(0, entry)
@@ -114,153 +114,71 @@ class DynamicAgentSquad:
         return [{"name": k, "prompt": v["prompt"]} for k, v in self.agents.items()]
 
 
-def generate_agent_squad(user_query):
-    """Orchestrator dynamically generates agent squad."""
+def generate_tasks(user_query, max_agents):
+    """Phase 1: Orchestrator decomposes query into micro-tasks."""
     response = client.chat.completions.create(
         model=ORCHESTRATOR_MODEL,
         messages=[
-            {"role": "system", "content": ORCHESTRATOR_GENERATOR_PROMPT},
-            {"role": "user", "content": f"Design an optimal agent squad (max {MAX_AGENTS} agents) for this query:\n\n{user_query}"}
+            {"role": "system", "content": ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)},
+            {"role": "user", "content": f"Decompose this query into {max_agents} independent micro-tasks:\n\n{user_query}"}
         ],
-        max_tokens=4000
+        max_tokens=3000
     )
     raw = response.choices[0].message.content.strip()
 
-    agent_list = extract_json_from_response(raw)
-    if agent_list is None:
-        raise ValueError(f"Failed to parse agent squad: {raw[:200]}")
+    tasks = extract_json_from_response(raw)
+    if tasks is None:
+        raise ValueError(f"Failed to parse tasks: {raw[:200]}")
 
-    squad = DynamicAgentSquad()
-    for agent in agent_list[:MAX_AGENTS]:
-        if isinstance(agent, dict) and "name" in agent and "prompt" in agent:
-            squad.add_agent(agent["name"], agent["prompt"])
+    valid_tasks = []
+    for t in tasks[:max_agents]:
+        if isinstance(t, dict) and "agent_name" in t and "task" in t:
+            valid_tasks.append(t)
 
-    if len(squad.agents) == 0:
-        raise ValueError("Orchestrator generated empty agent squad")
+    if len(valid_tasks) == 0:
+        raise ValueError("No valid tasks generated")
 
-    return squad
-
-
-def orchestrate_next_agent(squad, room_history, last_speaker=None, excluded_agents=None):
-    """Orchestrator reads history, picks next agent or declares convergence.
-    Anti-monopoly: excludes recent speakers to force diversity."""
-    if excluded_agents is None:
-        excluded_agents = set()
-
-    # Filter available agents - exclude recent speakers
-    all_agents = set(squad.get_active_agents().keys())
-    available_agents = all_agents - excluded_agents
-
-    # If all agents excluded, reset exclusion
-    if not available_agents:
-        available_agents = all_agents
-        excluded_agents = set()
-
-    agent_list = ", ".join(available_agents)
-
-    # Build diversity instruction
-    diversity_note = ""
-    if last_speaker:
-        diversity_note = f"\nNOTE: {last_speaker} spoke last turn. Do NOT select them again."
-    if excluded_agents:
-        diversity_note += f"\nEXCLUDED (recently spoke): {', '.join(excluded_agents)}"
-
-    try:
-        response = client.chat.completions.create(
-            model=ORCHESTRATOR_MODEL,
-            messages=[
-                {"role": "system", "content": ORCHESTRATOR_DIVERSITY_DIRECTIVE + "\nOutput raw JSON only."},
-                {"role": "user", "content": (
-                    f"Discussion so far:\n{room_history[:1500]}\n\n"
-                    f"Available agents: {agent_list}\n"
-                    f"{diversity_note}\n\n"
-                    "Pick the next agent to speak who has NEW insights to add. "
-                    "If analysis is complete, set converged=true.\n"
-                    'Output: {"next_agent": "name", "converged": false}'
-                )}
-            ],
-            max_tokens=100
-        )
-        raw = response.choices[0].message.content.strip()
-        if raw:
-            decision = extract_json_from_response(raw)
-            if decision and isinstance(decision, dict):
-                if decision.get("converged"):
-                    return {"next_agent": None, "converged": True, "reason": "Orchestrator declared convergence."}
-                chosen = decision.get("next_agent")
-                # ENFORCEMENT: Accept if agent is available
-                if chosen in available_agents:
-                    return decision
-                # OVERRIDE: If LLM chose excluded agent, pick first available
-                elif chosen in excluded_agents:
-                    for name in available_agents:
-                        return {"next_agent": name, "converged": False, "reason": f"Anti-monopoly override: {chosen} excluded."}
-    except Exception:
-        pass
-
-    # Fallback: round-robin through available agents
-    for name in available_agents:
-        return {"next_agent": name, "converged": False, "reason": "Fallback selection."}
-    return {"next_agent": None, "converged": True, "reason": "No agents available."}
+    return valid_tasks
 
 
-def agent_speak(agent_name, agent_prompt, room_history):
-    """Agent reads room history and contributes analysis."""
+def execute_agent_task(agent_name, task, query, retry=0):
+    """Phase 2: Single agent executes one task. Returns (name, result, success)."""
     try:
         response = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": AGENT_SPEAK_PROMPT.format(
+                {"role": "system", "content": AGENT_TASK_PROMPT.format(
                     name=agent_name,
-                    prompt=agent_prompt,
-                    history=room_history[:1500]
+                    task=task,
+                    query=query
                 )},
-                {"role": "user", "content": "Contribute your analysis."}
+                {"role": "user", "content": "Provide your analysis now."}
             ],
-            max_tokens=800
+            max_tokens=500
         )
         result = response.choices[0].message.content.strip()
         if result:
-            return result
-    except Exception:
-        pass
+            return (agent_name, result, True)
+    except Exception as e:
+        if retry < RETRY_COUNT:
+            return execute_agent_task(agent_name, task, query, retry + 1)
 
-    return "CONVERGED"
-
-
-def detect_loop(speaker_history):
-    """Loop Repetition Detection: A->B->A->B or A->A->A->A patterns."""
-    if len(speaker_history) < LOOP_DETECTION_WINDOW:
-        return False
-
-    recent = list(speaker_history)[-LOOP_DETECTION_WINDOW:]
-
-    # A->B->A->B pattern
-    if len(recent) == 4:
-        if recent[0] == recent[2] and recent[1] == recent[3] and recent[0] != recent[1]:
-            return True
-
-    # A->A->A->A pattern
-    if len(set(recent)) == 1:
-        return True
-
-    return False
+    return (agent_name, "[AGENT FAILED]", False)
 
 
-def synthesize_final_report(room_history, user_query, truncation_warning=None):
-    """Orchestrator synthesizes the final report."""
-    system_prompt = ORCHESTRATOR_SYNTHESIS_PROMPT.format(
-        history=room_history[:2000],
-        query=user_query
-    )
-
-    if truncation_warning:
-        system_prompt += f"\n\n{truncation_warning}"
+def synthesize_report(analyses, user_query):
+    """Phase 3: Orchestrator synthesizes all analyses into final report."""
+    analyses_text = "\n\n".join([
+        f"### {name}:\n{result}" for name, result in analyses.items()
+    ])
 
     response = client.chat.completions.create(
         model=ORCHESTRATOR_MODEL,
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": ORCHESTRATOR_SYNTHESIS_PROMPT.format(
+                analyses=analyses_text[:3000],
+                query=user_query
+            )},
             {"role": "user", "content": "Generate the final BIFAS report in markdown."}
         ],
         max_tokens=2000
@@ -269,14 +187,13 @@ def synthesize_final_report(room_history, user_query, truncation_warning=None):
 
 
 def audit_report(report, user_query):
-    """Auditor validates the final report."""
-    report_truncated = report[:1500] if len(report) > 1500 else report
+    """Phase 4: Auditor validates the final report."""
     try:
         response = client.chat.completions.create(
             model=ORCHESTRATOR_MODEL,
             messages=[
-                {"role": "system", "content": "Review the report quality. Output STATUS: APPROVED or STATUS: REJECTED with one sentence reason."},
-                {"role": "user", "content": f"Query: {user_query}\n\nReport:\n{report_truncated}"}
+                {"role": "system", "content": "Review report quality. Output STATUS: APPROVED or STATUS: REJECTED."},
+                {"role": "user", "content": AUDITOR_PROMPT.format(query=user_query, report=report[:1500])}
             ],
             max_tokens=150
         )
@@ -286,130 +203,114 @@ def audit_report(report, user_query):
     except Exception:
         pass
 
-    return "STATUS: APPROVED (audit fallback - report generated successfully)"
+    return "STATUS: APPROVED (audit fallback)"
 
 
 def run_bifas_pipeline(user_query, depth="Standard"):
     """
-    Main pipeline: Supervised Dynamic Group Chat Matrix.
-    2-call-per-turn model. Hard-capped at MAX_TURNS.
-
-    Adaptive Guardrails:
-    1. Dynamic Turn Scaling: max_turns = min(depth_rounds, MAX_TURNS)
-    2. Soft-Cap Graceful Fallback: If max_turns hit, synthesize with warning
-    3. Loop Repetition Detection: Track speakers, force convergence if looping
+    Sprint-based pipeline with parallel execution.
+    Hard 5-minute timeout. Agent count controls depth.
     """
-    max_turns = min(DEPTH_CONFIG[depth]["max_rounds"], MAX_TURNS)
+    start_time = time.time()
+    max_agents = DEPTH_CONFIG[depth]["max_agents"]
 
     result = {
         "agent_squad": [],
+        "tasks": [],
         "rounds": [],
         "final_report": "",
         "audit_status": "",
         "total_messages": 0,
-        "guardrail_triggered": None
+        "guardrail_triggered": None,
+        "execution_time": 0
     }
 
     try:
-        # STEP 1: Generate Agent Squad
-        squad = generate_agent_squad(user_query)
-        result["agent_squad"] = squad.to_list()
+        # PHASE 1: Task Decomposition (1 call)
+        tasks = generate_tasks(user_query, max_agents)
+        result["tasks"] = tasks
+        result["agent_squad"] = [{"name": t["agent_name"], "prompt": t["task"]} for t in tasks]
 
-        # STEP 2: Initialize Room
+        # Check timeout
+        if time.time() - start_time > TIMEOUT_SECONDS:
+            result["guardrail_triggered"] = "Timeout after task decomposition"
+            result["execution_time"] = time.time() - start_time
+            return result
+
+        # Initialize room
         room_id = band.create_room(name="BIFAS-Session")
         band.send_message(room_id, "System", f"BIFAS Query: {user_query}", msg_type="system")
 
-        # STEP 3: Multi-Turn Group Chat (2 calls per turn)
-        speaker_history = deque(maxlen=LOOP_DETECTION_WINDOW)
-        last_speaker = None
-        excluded_agents = set()
-        consecutive_same = 0
-        converged = False
-        turn = 0
-        truncation_warning = None
+        # PHASE 2: Parallel Sprint Execution (N calls, concurrent)
+        analyses = {}
+        failed_agents = []
 
-        while turn < max_turns and not converged:
-            turn += 1
-            round_data = {"round": turn, "next_agent": None, "contribution": None}
+        with ThreadPoolExecutor(max_workers=max_agents) as executor:
+            future_to_task = {
+                executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query): t
+                for t in tasks
+            }
 
-            # CALL 1: Orchestrator reads history, picks next agent (with exclusion)
-            history = band.get_history_formatted(room_id)
-            decision = orchestrate_next_agent(squad, history, last_speaker=last_speaker, excluded_agents=excluded_agents)
+            for future in as_completed(future_to_task):
+                # Check timeout
+                if time.time() - start_time > TIMEOUT_SECONDS:
+                    result["guardrail_triggered"] = "Timeout during agent execution"
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
 
-            if decision.get("converged"):
-                converged = True
-                band.send_message(room_id, "Orchestrator", "[CONVERGED]", msg_type="arbitration")
-                result["rounds"].append(round_data)
-                break
+                task = future_to_task[future]
+                try:
+                    agent_name, result_text, success = future.result(timeout=60)
+                    if success:
+                        analyses[agent_name] = result_text
+                        band.send_message(room_id, agent_name, result_text, msg_type="contribution")
+                        result["rounds"].append({
+                            "round": len(result["rounds"]) + 1,
+                            "next_agent": agent_name,
+                            "contribution": result_text[:300]
+                        })
+                    else:
+                        failed_agents.append(agent_name)
+                        band.send_message(room_id, agent_name, "[FAILED]", msg_type="request")
+                except Exception:
+                    failed_agents.append(task["agent_name"])
 
-            agent_name = decision.get("next_agent")
-            if not agent_name:
-                converged = True
-                break
+        # Check timeout
+        if time.time() - start_time > TIMEOUT_SECONDS:
+            result["guardrail_triggered"] = "Timeout after agent execution"
+            result["execution_time"] = time.time() - start_time
+            if not analyses:
+                return result
 
-            round_data["next_agent"] = agent_name
+        # PHASE 3: Synthesis (1 call)
+        if analyses:
+            final_report = synthesize_report(analyses, user_query)
+            result["final_report"] = final_report
 
-            # CALL 2: Selected agent speaks
-            agent_info = squad.get_agent(agent_name)
-            contribution = agent_speak(agent_name, agent_info["prompt"], history)
+            # Check timeout
+            if time.time() - start_time > TIMEOUT_SECONDS:
+                result["guardrail_triggered"] = "Timeout after synthesis"
+                result["audit_status"] = "Skipped - timeout"
+                result["total_messages"] = len(band.get_room_history(room_id))
+                result["execution_time"] = time.time() - start_time
+                return result
 
-            # Check if agent declares convergence
-            if "CONVERGED" in contribution.upper():
-                band.send_message(room_id, agent_name, "[NO NEW INPUT]", msg_type="request")
-                round_data["contribution"] = "[NO NEW INPUT]"
-            else:
-                band.send_message(room_id, agent_name, contribution, msg_type="contribution")
-                round_data["contribution"] = contribution[:300]
+            # PHASE 4: Audit (1 call)
+            result["audit_status"] = audit_report(final_report, user_query)
+        else:
+            result["final_report"] = "No agent analyses completed."
+            result["audit_status"] = "FAILED - no analyses"
 
-            # Anti-Monopoly: Track consecutive same-speaker
-            if agent_name == last_speaker:
-                consecutive_same += 1
-            else:
-                consecutive_same = 1
-
-            # Update speaker tracking
-            last_speaker = agent_name
-            speaker_history.append(agent_name)
-
-            # Update exclusion set: exclude last 2 speakers
-            if len(speaker_history) >= 2:
-                excluded_agents = set(list(speaker_history)[-2:])
-            else:
-                excluded_agents = set()
-
-            # Warning at 2 consecutive same speaker
-            if consecutive_same == 2:
-                warning = "[SYSTEM WARNING]: Agent fixation detected. Diversify immediately or emit FINALIZE."
-                band.send_message(room_id, "System", warning, msg_type="system")
-                result["guardrail_triggered"] = "Warning: agent fixation"
-
-            # Hard-kill at 3+ consecutive or loop pattern
-            if consecutive_same >= 3 or detect_loop(speaker_history):
-                band.send_message(room_id, "System", LOOP_INJECTION, msg_type="system")
-                result["guardrail_triggered"] = "Loop detected - forced convergence"
-                converged = True
-
-            result["rounds"].append(round_data)
-
-        # GUARDRAIL: Soft-cap fallback
-        if turn >= max_turns and not converged:
-            truncation_warning = (
-                "⚠️ SYSTEM NOTICE: Maximum orchestration depth reached. "
-                f"Analysis compiled from {turn}-turn transcript."
-            )
-            result["guardrail_triggered"] = "Max turns reached"
-
-        # STEP 4: Synthesize Final Report
-        history = band.get_history_formatted(room_id)
-        final_report = synthesize_final_report(history, user_query, truncation_warning)
-        result["final_report"] = final_report
-
-        # STEP 5: Audit
-        result["audit_status"] = audit_report(final_report, user_query)
         result["total_messages"] = len(band.get_room_history(room_id))
+        result["execution_time"] = time.time() - start_time
+
+        # Report failures
+        if failed_agents:
+            result["guardrail_triggered"] = f"Failed agents: {', '.join(failed_agents)}"
 
     except Exception as e:
         result["audit_status"] = f"Pipeline error: {str(e)}"
+        result["execution_time"] = time.time() - start_time
         raise
 
     return result

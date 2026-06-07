@@ -53,11 +53,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">BIFAS</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Supervised Dynamic Group Chat Matrix</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Sprint Architecture — Parallel Agent Execution</div>', unsafe_allow_html=True)
 
 query = st.text_area(
     "ENTER ANALYSIS DIRECTIVE",
-    placeholder="e.g., Analyze BTC vs SOL price spikes over the last 7 days",
+    placeholder="e.g., Analyze Forex correlations between EUR/USD, GBP/USD, and USD/JPY",
     height=100
 )
 
@@ -71,13 +71,13 @@ with col_depth:
     )
 with col_button:
     st.write("")
-    run_clicked = st.button("Initialize BIFAS Run", type="primary", use_container_width=True)
+    run_clicked = st.button("Initialize BIFAS Sprint", type="primary", use_container_width=True)
 
 if run_clicked:
     if not query.strip():
         st.warning("Enter a query to initiate analysis.")
     else:
-        with st.spinner(f"Generating agent squad via MiMo-V2.5pro ({depth} mode)..."):
+        with st.spinner(f"Executing Sprint Analysis ({depth} mode, {DEPTH_CONFIG[depth]['max_agents']} agents)..."):
             try:
                 result = run_bifas_pipeline(query, depth=depth)
             except Exception as e:
@@ -105,23 +105,22 @@ if run_clicked:
             else:
                 st.warning(audit)
 
-            st.metric("Total Messages", result.get("total_messages", 0))
-            st.metric("Discussion Rounds", len(result.get("rounds", [])))
+            # Metrics
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                st.metric("Agents", len(result.get("agent_squad", [])))
+                st.metric("Messages", result.get("total_messages", 0))
+            with col_m2:
+                st.metric("Time", f"{result.get('execution_time', 0):.1f}s")
+                st.metric("Rounds", len(result.get("rounds", [])))
 
         with col_right:
-            st.subheader("Group Discussion")
+            st.subheader("Agent Contributions")
             for round_data in result.get("rounds", []):
-                with st.expander(f"Round {round_data['round']}", expanded=False):
-                    if round_data.get("requests"):
-                        st.markdown("**Requests to Speak:**")
-                        for req in round_data["requests"]:
-                            st.markdown(f"*{req['agent']}:*")
-                            st.write(req['content'][:300] + "...")
-
-                    if round_data.get("arbitration"):
-                        st.markdown("**Orchestrator Decision:**")
-                        arb = round_data["arbitration"]
-                        st.info(f"Selected: **{arb.get('next_speaker', 'N/A')}** — {arb.get('reason', '')}")
+                agent_name = round_data.get("next_agent", "Unknown")
+                contribution = round_data.get("contribution", "N/A")
+                with st.expander(f"📊 {agent_name}", expanded=False):
+                    st.write(contribution)
 
             st.subheader("Final Report")
             report = result.get("final_report", "No report generated.")

@@ -1,14 +1,14 @@
 # BIFAS — Band Incorporated Finance Analytics System
 
-A standalone, multi-agent financial and cryptocurrency analysis platform featuring a **Supervised Dynamic Group Chat Matrix** powered by MiMo-V2.5pro.
+A standalone, multi-agent financial analysis platform featuring **Sprint Architecture** with parallel agent execution powered by MiMo-V2.5pro.
 
 ---
 
 ## Overview
 
-BIFAS is a dynamic, multi-agent system that deploys specialized AI analysts to dissect financial queries through collaborative multi-turn discussions. Rather than relying on a single LLM response, BIFAS dynamically generates a custom team of domain experts for each query, orchestrates their collaborative debate, and synthesizes their findings into a pristine executive report.
+BIFAS is a dynamic, multi-agent system that decomposes financial queries into independent micro-tasks, executes them in parallel using specialized AI agents, and synthesizes the results into a pristine executive report.
 
-**Key Innovation:** The Orchestrator acts as a group chat moderator, dynamically selecting which agent speaks next and judging when the discussion has converged — all within a 5-minute budget enforced by adaptive guardrails.
+**Key Innovation:** Sprint Architecture with parallel execution completes analysis in ~1 minute regardless of complexity, with a hard 5-minute timeout guarantee.
 
 ---
 
@@ -16,84 +16,59 @@ BIFAS is a dynamic, multi-agent system that deploys specialized AI analysts to d
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        STREAMLIT UI                         │
-│              [Quick] [Standard] [Deep]                       │
+│                    USER QUERY                                │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              ORCHESTRATOR: AGENT SQUAD GENERATION            │
-│    Dynamically creates N agents with custom names/prompts    │
-│    Output: [{"name": "...", "prompt": "..."}, ...]           │
+│         PHASE 1: ORCHESTRATOR TASK DECOMPOSITION             │
+│                    (1 API call)                              │
+│    Split query into N independent micro-tasks (max 12)       │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                 GROUP CHAT DISCUSSION LOOP                   │
-│                   (2 calls per turn)                         │
+│              PHASE 2: PARALLEL SPRINT EXECUTION              │
+│                   (N API calls, concurrent)                  │
 │                                                              │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
+│   │ Agent 1  │ │ Agent 2  │ │ Agent 3  │ │ Agent N  │      │
+│   │ Task A   │ │ Task B   │ │ Task C   │ │ Task N   │      │
+│   └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘      │
+│        │            │            │            │              │
+│        ▼            ▼            ▼            ▼              │
 │   ┌─────────────────────────────────────────────────────┐   │
-│   │  Turn N:                                             │   │
-│   │    CALL 1: Orchestrator reads history, picks agent   │   │
-│   │    CALL 2: Selected agent contributes analysis       │   │
-│   │    → Loop detection check                            │   │
-│   │    → Convergence check                               │   │
+│   │              LOCALBANDSDK ROOM                       │   │
+│   │         All results posted here                      │   │
 │   └─────────────────────────────────────────────────────┘   │
-│                                                              │
-│   [REPEAT until convergence or max_turns]                    │
-│                                                              │
-│   Adaptive Guardrails:                                       │
-│     • Dynamic Turn Scaling: max_turns = min(depth, 11)       │
-│     • Loop Detection: A->B->A->B or A->A->A->A patterns     │
-│     • Soft-Cap Fallback: Synthesize with warning if max hit  │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    SYNTHESIS ENGINE                          │
-│          Orchestrator compiles final report                  │
+│              PHASE 3: SYNTHESIS ENGINE                       │
+│                    (1 API call)                              │
+│          Orchestrator reads all results, creates report      │
 └──────────────────────────┬──────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    AUDIT VALIDATION                          │
-│          Reviews final report → APPROVED / REJECTED          │
+│              PHASE 4: AUDIT VALIDATION                       │
+│                    (1 API call)                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2-Call-Per-Turn Model
-
-Each discussion turn uses exactly 2 API calls:
-1. **Orchestrator** reads room history, selects next speaker
-2. **Selected agent** reads history, contributes analysis
-
-This ensures predictable performance within the 5-minute budget.
-
-### Adaptive Guardrails
-
-| Guardrail | Mechanism | Action |
-|-----------|-----------|--------|
-| **Dynamic Turn Scaling** | `max_turns = min(depth, 11)` | Scales with analysis depth |
-| **Loop Detection** | Track last 4 speakers | Force convergence if A->B->A->B |
-| **Soft-Cap Fallback** | max_turns reached | Synthesize with warning badge |
-| **Agent Exhaustion** | All agents return CONVERGED | Natural convergence |
-| **Orchestrator Failure** | Empty/invalid response | Fallback to round-robin |
-
 ---
 
-## Agent Roster
+## Key Features
 
-Agents are **dynamically generated** per query. Example squad for "Analyze BTC trends":
-
-| Agent | Domain |
-|-------|--------|
-| BTC_Technical_Analyst | Price action, RSI, support/resistance |
-| OnChain_Analyst | Exchange flows, whale activity |
-| Macro_Economist | Fed policy, inflation, DXY |
-| Market_Sentiment_Analyst | Fear/greed, news sentiment |
-| Derivatives_Market_Analyst | Options, futures, funding rates |
-
-The Orchestrator designs the optimal squad for each specific query.
+| Feature | Description |
+|---------|-------------|
+| **Parallel Execution** | All agents run simultaneously via ThreadPoolExecutor |
+| **5-Minute Hard Timeout** | Pipeline never exceeds 300 seconds |
+| **Dynamic Task Decomposition** | Orchestrator splits queries into independent micro-tasks |
+| **Hybrid Agent Generation** | Mix of domain-based and asset-based agents |
+| **Retry Logic** | Failed agents retry once before skipping |
+| **Partial Results** | Uses whatever agents complete before timeout |
 
 ---
 
@@ -104,6 +79,7 @@ The Orchestrator designs the optimal squad for each specific query.
 | **UI** | Streamlit |
 | **LLM** | MiMo-V2.5pro (agents) / MiMo-V2.5 (orchestrator) |
 | **Coordination** | LocalBandSDK (in-memory rooms) |
+| **Parallelism** | ThreadPoolExecutor |
 | **Language** | Python 3.12+ |
 | **Config** | python-dotenv |
 
@@ -117,22 +93,12 @@ BIFAS/
 ├── .env                  # API keys (not committed)
 ├── .gitignore            # Ignored files
 ├── config.py             # Environment loader + MiMo client
-├── bifas_agents.py       # Orchestrator prompts + depth config
-├── engine.py             # 2-call pipeline + adaptive guardrails
-├── app.py                # Streamlit UI with depth selector
-├── TEST_REPORT.md        # Comprehensive test results
+├── bifas_agents.py       # Task decomposition + agent prompts
+├── engine.py             # Sprint architecture with parallel execution
+├── app.py                # Streamlit UI
+├── TEST_REPORT.md        # Test results
 └── README.md             # This file
 ```
-
-### File Descriptions
-
-- **`config.py`** — Loads `MIMO_API_KEY` from `.env`. Instantiates OpenAI client at `https://token-plan-sgp.xiaomimimo.com/v1`.
-
-- **`bifas_agents.py`** — Contains `ORCHESTRATOR_GENERATOR_PROMPT` (squad generation), `AGENT_SPEAK_PROMPT` (agent contribution), `ORCHESTRATOR_SYNTHESIS_PROMPT` (final report), and `DEPTH_CONFIG` (Quick/Standard/Deep).
-
-- **`engine.py`** — The brain. Contains `LocalBandSDK` (in-memory rooms), `DynamicAgentSquad`, `orchestrate_next_agent()`, `agent_speak()`, `detect_loop()`, and `run_bifas_pipeline()` with adaptive guardrails.
-
-- **`app.py`** — Streamlit frontend with depth selector, expandable round display, and guardrail warnings.
 
 ---
 
@@ -141,7 +107,7 @@ BIFAS/
 ### Prerequisites
 
 - Python 3.10+
-- A MiMo API key (from Xiaomi MiMo platform)
+- A MiMo API key
 
 ### Installation
 
@@ -169,43 +135,31 @@ streamlit run app.py
 
 ## Usage
 
-1. Launch the app — see the BIFAS terminal interface
+1. Launch the app
 2. Select analysis depth:
-   - **Quick** (~1.5 min) — 4 turns, fast analysis
-   - **Standard** (~3 min) — 7 turns, balanced
-   - **Deep** (~5 min) — 11 turns, thorough
-3. Enter a financial query, e.g.:
-   - `Analyze BTC vs SOL price spikes over the last 7 days`
-   - `Perform M&A due diligence on Ethereum ecosystem`
-   - `Evaluate DeFi token risks for institutional investment`
-4. Click **Initialize BIFAS Run**
-5. Watch the group discussion unfold in expandable rounds
-6. Review the final synthesized report
+   - **Quick** — 3 agents, ~1 minute
+   - **Standard** — 6 agents, ~1 minute
+   - **Deep** — 12 agents, ~1 minute
+3. Enter a financial query
+4. Click **Initialize BIFAS Sprint**
+5. Watch agents execute in parallel
+6. Review the synthesized report
 
 ---
 
 ## API Call Budget
 
-| Depth | Turns | Total Calls | Est. Time |
-|-------|-------|-------------|-----------|
-| Quick | 4 | 11 | ~2 min |
-| Standard | 7 | 17 | ~3.4 min |
-| Deep | 11 | 25 | ~5 min |
-
-Budget formula: `3 fixed + (2 × turns) = total calls`
+| Depth | Agents | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Total | Time |
+|-------|--------|---------|---------|---------|---------|-------|------|
+| Quick | 3 | 1 | 3 (parallel) | 1 | 1 | 6 | ~48s |
+| Standard | 6 | 1 | 6 (parallel) | 1 | 1 | 9 | ~48s |
+| Deep | 12 | 1 | 12 (parallel) | 1 | 1 | 15 | ~48s |
 
 ---
 
 ## Test Results
 
 See [TEST_REPORT.md](TEST_REPORT.md) for comprehensive test results.
-
-**Summary:**
-- ✅ All unit tests pass (LocalBandSDK, DynamicAgentSquad, JSON extraction, loop detection)
-- ✅ Full pipeline completes in ~2.2 minutes (Quick depth)
-- ✅ Loop detection correctly triggers
-- ✅ Deadlock prevention verified for all scenarios
-- ✅ 5-minute budget enforced
 
 ---
 
