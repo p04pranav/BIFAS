@@ -21,6 +21,12 @@ Rules:
 - Do NOT include a Synthesizer — the Orchestrator handles final synthesis
 - Focus on financial, technical, on-chain, sentiment, and correlation domains as relevant"""
 
+ORCHESTRATOR_DIVERSITY_DIRECTIVE = """You must maximize cross-disciplinary collaboration.
+Do not allow a single sub-agent to dominate the floor.
+If an agent spoke in the previous turn, you are STRICTLY discouraged from selecting them again
+unless no other domain expert in the generated squad can address the current data gap.
+Always prioritize agents who have NOT yet contributed or who haven't spoken recently."""
+
 AGENT_SPEAK_PROMPT = """You are {name} in a multi-agent financial analysis discussion.
 
 Your domain and expertise:

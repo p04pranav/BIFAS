@@ -4,6 +4,7 @@ from collections import deque
 from config import client
 from bifas_agents import (
     ORCHESTRATOR_GENERATOR_PROMPT,
+    ORCHESTRATOR_DIVERSITY_DIRECTIVE,
     ORCHESTRATOR_SYNTHESIS_PROMPT,
     AGENT_SPEAK_PROMPT,
     DEPTH_CONFIG
@@ -140,18 +141,39 @@ def generate_agent_squad(user_query):
     return squad
 
 
-def orchestrate_next_agent(squad, room_history):
-    """Orchestrator reads history, picks next agent or declares convergence."""
-    agent_list = ", ".join(squad.get_active_agents().keys())
+def orchestrate_next_agent(squad, room_history, last_speaker=None, excluded_agents=None):
+    """Orchestrator reads history, picks next agent or declares convergence.
+    Anti-monopoly: excludes recent speakers to force diversity."""
+    if excluded_agents is None:
+        excluded_agents = set()
+
+    # Filter available agents - exclude recent speakers
+    all_agents = set(squad.get_active_agents().keys())
+    available_agents = all_agents - excluded_agents
+
+    # If all agents excluded, reset exclusion
+    if not available_agents:
+        available_agents = all_agents
+        excluded_agents = set()
+
+    agent_list = ", ".join(available_agents)
+
+    # Build diversity instruction
+    diversity_note = ""
+    if last_speaker:
+        diversity_note = f"\nNOTE: {last_speaker} spoke last turn. Do NOT select them again."
+    if excluded_agents:
+        diversity_note += f"\nEXCLUDED (recently spoke): {', '.join(excluded_agents)}"
 
     try:
         response = client.chat.completions.create(
             model=ORCHESTRATOR_MODEL,
             messages=[
-                {"role": "system", "content": "Output raw JSON only."},
+                {"role": "system", "content": ORCHESTRATOR_DIVERSITY_DIRECTIVE + "\nOutput raw JSON only."},
                 {"role": "user", "content": (
                     f"Discussion so far:\n{room_history[:1500]}\n\n"
-                    f"Available agents: {agent_list}\n\n"
+                    f"Available agents: {agent_list}\n"
+                    f"{diversity_note}\n\n"
                     "Pick the next agent to speak who has NEW insights to add. "
                     "If analysis is complete, set converged=true.\n"
                     'Output: {"next_agent": "name", "converged": false}'
@@ -165,13 +187,19 @@ def orchestrate_next_agent(squad, room_history):
             if decision and isinstance(decision, dict):
                 if decision.get("converged"):
                     return {"next_agent": None, "converged": True, "reason": "Orchestrator declared convergence."}
-                if decision.get("next_agent") in squad.get_active_agents():
+                chosen = decision.get("next_agent")
+                # ENFORCEMENT: Accept if agent is available
+                if chosen in available_agents:
                     return decision
+                # OVERRIDE: If LLM chose excluded agent, pick first available
+                elif chosen in excluded_agents:
+                    for name in available_agents:
+                        return {"next_agent": name, "converged": False, "reason": f"Anti-monopoly override: {chosen} excluded."}
     except Exception:
         pass
 
-    # Fallback: round-robin through active agents
-    for name in squad.get_active_agents():
+    # Fallback: round-robin through available agents
+    for name in available_agents:
         return {"next_agent": name, "converged": False, "reason": "Fallback selection."}
     return {"next_agent": None, "converged": True, "reason": "No agents available."}
 
@@ -293,6 +321,9 @@ def run_bifas_pipeline(user_query, depth="Standard"):
 
         # STEP 3: Multi-Turn Group Chat (2 calls per turn)
         speaker_history = deque(maxlen=LOOP_DETECTION_WINDOW)
+        last_speaker = None
+        excluded_agents = set()
+        consecutive_same = 0
         converged = False
         turn = 0
         truncation_warning = None
@@ -301,9 +332,9 @@ def run_bifas_pipeline(user_query, depth="Standard"):
             turn += 1
             round_data = {"round": turn, "next_agent": None, "contribution": None}
 
-            # CALL 1: Orchestrator reads history, picks next agent
+            # CALL 1: Orchestrator reads history, picks next agent (with exclusion)
             history = band.get_history_formatted(room_id)
-            decision = orchestrate_next_agent(squad, history)
+            decision = orchestrate_next_agent(squad, history, last_speaker=last_speaker, excluded_agents=excluded_agents)
 
             if decision.get("converged"):
                 converged = True
@@ -330,11 +361,32 @@ def run_bifas_pipeline(user_query, depth="Standard"):
                 band.send_message(room_id, agent_name, contribution, msg_type="contribution")
                 round_data["contribution"] = contribution[:300]
 
-            # Loop Detection
+            # Anti-Monopoly: Track consecutive same-speaker
+            if agent_name == last_speaker:
+                consecutive_same += 1
+            else:
+                consecutive_same = 1
+
+            # Update speaker tracking
+            last_speaker = agent_name
             speaker_history.append(agent_name)
-            if detect_loop(speaker_history):
+
+            # Update exclusion set: exclude last 2 speakers
+            if len(speaker_history) >= 2:
+                excluded_agents = set(list(speaker_history)[-2:])
+            else:
+                excluded_agents = set()
+
+            # Warning at 2 consecutive same speaker
+            if consecutive_same == 2:
+                warning = "[SYSTEM WARNING]: Agent fixation detected. Diversify immediately or emit FINALIZE."
+                band.send_message(room_id, "System", warning, msg_type="system")
+                result["guardrail_triggered"] = "Warning: agent fixation"
+
+            # Hard-kill at 3+ consecutive or loop pattern
+            if consecutive_same >= 3 or detect_loop(speaker_history):
                 band.send_message(room_id, "System", LOOP_INJECTION, msg_type="system")
-                result["guardrail_triggered"] = "Loop detected"
+                result["guardrail_triggered"] = "Loop detected - forced convergence"
                 converged = True
 
             result["rounds"].append(round_data)
