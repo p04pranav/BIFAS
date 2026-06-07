@@ -1,0 +1,4 @@
+streamlit
+band-sdk
+openai
+python-dotenv
