@@ -141,7 +141,6 @@ BIFAS/
 ├── bifas_agents.py       # Task decomposition + agent prompts
 ├── engine.py             # Sprint architecture with parallel execution
 ├── app.py                # Streamlit UI
-├── test_runner.py        # Automated test suite
 ├── RAW_TEST_OUTPUT.md    # Full raw test output (9 runs)
 ├── TEST_REPORT.md        # Test results summary
 └── README.md             # This file
