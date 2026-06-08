@@ -249,10 +249,19 @@ See [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md) for full raw output of all 9 runs.
 
 ---
 
+## Credits
+
+| Role | Contributor |
+|------|-------------|
+| **Finance Concepts & Research** | Kushal H |
+| **Implementation & Testing** | Pranav S |
+
+---
+
 ## License
 
 Proprietary — All rights reserved.
 
 ---
 
-Built with precision by **PranavS**
+Built with precision by **PranavS** & **KushalH**

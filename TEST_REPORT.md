@@ -149,5 +149,9 @@ All 9 test configurations pass. Reports now cite consistent, verifiable, real ma
 
 ---
 
-**Test Engineer:** MiMo-V2.5pro  
+**Built in collaboration with:**  
+- **Kushal H** — Finance Concepts & Research  
+- **Pranav S** — Implementation & Testing  
+
+**Test Engineer:** Pranav S  
 **Date:** June 8, 2026
