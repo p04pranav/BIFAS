@@ -10,8 +10,8 @@ For each micro-task, provide:
 Output ONLY a raw JSON array. No markdown, no explanation.
 Example:
 [
-  {"agent_name": "EUR_Technical", "task": "Analyze EUR/USD price action...", "domain": "forex_technical"},
-  {"agent_name": "GBP_Correlation", "task": "Analyze GBP/USD correlations...", "domain": "forex_correlation"}
+  {{"agent_name": "EUR_Technical", "task": "Analyze EUR/USD price action...", "domain": "forex_technical"}},
+  {{"agent_name": "GBP_Correlation", "task": "Analyze GBP/USD correlations...", "domain": "forex_correlation"}}
 ]
 
 Rules:
@@ -28,7 +28,11 @@ Your specific task:
 
 Context: The user asked: "{query}"
 
+CURRENT MARKET DATA (use these real numbers, do not guess prices or metrics):
+{market_data}
+
 Provide a concise, data-driven analysis.
+- Use the REAL data provided above — cite specific numbers from it
 - Focus on specific findings, data points, and insights
 - Be analytical and precise
 - Max 300 words

@@ -10,6 +10,10 @@ from bifas_agents import (
     AUDITOR_PROMPT,
     DEPTH_CONFIG
 )
+from data_fetcher import (
+    detect_domains, extract_tickers, fetch_all_data,
+    get_ticker_data_for_agent
+)
 
 MODEL = "mimo-v2.5-pro"
 ORCHESTRATOR_MODEL = "mimo-v2.5"
@@ -122,7 +126,7 @@ def generate_tasks(user_query, max_agents):
             {"role": "system", "content": ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)},
             {"role": "user", "content": f"Decompose this query into {max_agents} independent micro-tasks:\n\n{user_query}"}
         ],
-        max_tokens=3000
+        max_tokens=6000
     )
     raw = response.choices[0].message.content.strip()
 
@@ -141,8 +145,8 @@ def generate_tasks(user_query, max_agents):
     return valid_tasks
 
 
-def execute_agent_task(agent_name, task, query, retry=0):
-    """Phase 2: Single agent executes one task. Returns (name, result, success)."""
+def execute_agent_task(agent_name, task, query, market_data="No specific data available.", retry=0):
+    """Phase 2: Single agent executes one task with market data context. Returns (name, result, success)."""
     try:
         response = client.chat.completions.create(
             model=MODEL,
@@ -150,7 +154,8 @@ def execute_agent_task(agent_name, task, query, retry=0):
                 {"role": "system", "content": AGENT_TASK_PROMPT.format(
                     name=agent_name,
                     task=task,
-                    query=query
+                    query=query,
+                    market_data=market_data
                 )},
                 {"role": "user", "content": "Provide your analysis now."}
             ],
@@ -161,7 +166,7 @@ def execute_agent_task(agent_name, task, query, retry=0):
             return (agent_name, result, True)
     except Exception as e:
         if retry < RETRY_COUNT:
-            return execute_agent_task(agent_name, task, query, retry + 1)
+            return execute_agent_task(agent_name, task, query, market_data, retry + 1)
 
     return (agent_name, "[AGENT FAILED]", False)
 
@@ -226,10 +231,22 @@ def run_bifas_pipeline(user_query, depth="Standard"):
     }
 
     try:
+        # PHASE 0: Domain Detection + Data Pre-Fetch
+        domains = detect_domains(user_query)
+        tickers_map = extract_tickers(user_query, domains)
+        market_data = fetch_all_data(domains, tickers_map)
+        result["data_sources"] = list(tickers_map.keys())
+
         # PHASE 1: Task Decomposition (1 call)
         tasks = generate_tasks(user_query, max_agents)
         result["tasks"] = tasks
         result["agent_squad"] = [{"name": t["agent_name"], "prompt": t["task"]} for t in tasks]
+
+        # Inject per-ticker market data into each task
+        for task in tasks:
+            task["market_data"] = get_ticker_data_for_agent(
+                task["agent_name"], market_data, domains
+            )
 
         # Check timeout
         if time.time() - start_time > TIMEOUT_SECONDS:
@@ -247,7 +264,7 @@ def run_bifas_pipeline(user_query, depth="Standard"):
 
         with ThreadPoolExecutor(max_workers=max_agents) as executor:
             future_to_task = {
-                executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query): t
+                executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
                 for t in tasks
             }
 

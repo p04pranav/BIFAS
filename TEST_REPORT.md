@@ -1,177 +1,110 @@
-# BIFAS Test Report — Adaptive Guardrail Architecture
+# BIFAS Test Report — Sprint Architecture with Live Market Data
 
-**Date:** June 7, 2026  
-**Version:** 3.0.0 — Supervised Dynamic Group Chat Matrix  
+**Date:** June 8, 2026  
+**Version:** 5.0.0 — Sprint Architecture + Live Data Integration  
 **Environment:** Python 3.12, Linux  
 
 ---
 
 ## Executive Summary
 
-BIFAS has been successfully upgraded to the **Supervised Dynamic Group Chat Matrix** architecture with adaptive guardrails. The system now features dynamic agent generation, multi-turn collaborative discussions, and deadlock-free execution within a 5-minute budget.
+BIFAS v5.0 integrates **live market data from 7 keyless public APIs** into the Sprint Architecture pipeline. Agents now analyze real prices, technical indicators, on-chain metrics, and sentiment data instead of relying on LLM training knowledge. All 9 test configurations (3 domains x 3 depths) pass with APPROVED audit status.
 
-**Overall Status: ✅ ALL TESTS PASSED**
+**Overall Status: ALL 9 TESTS PASSED**
 
 ---
 
-## Architecture Upgrade Summary
+## Architecture: v4.0 → v5.0 Changes
 
-### Previous Architecture (v2.0)
-- Fixed agent pool (7 agents)
-- Single-turn sequential execution
-- 5+ calls per turn (N agent requests + 1 orchestrator)
-- Risk of infinite loops
+### New: Phase 0 — Domain Detection + Data Pre-Fetch
 
-### New Architecture (v3.0)
-- Dynamic agent generation (any size)
-- Multi-turn collaborative group chat
-- 2 calls per turn (1 orchestrator + 1 agent)
-- Adaptive guardrails (loop detection, soft-cap, dynamic scaling)
+| Component | Implementation |
+|-----------|---------------|
+| Domain Detection | Keyword-based classifier (stocks/crypto/forex/commodities) |
+| Ticker Extraction | Regex + keyword map for auto-detecting assets from query |
+| Data Pre-Fetch | Parallel HTTP calls via ThreadPoolExecutor (~2-3s) |
+| Technical Computation | pandas-ta: RSI, MACD, SMA(50/200), Bollinger Bands |
+| Per-Ticker Injection | Each agent receives only their assigned asset's data |
+| MVRV Approximation | VWAP proxy (~70% accuracy) with confidence label |
+
+### Data Sources (All Keyless — No API Keys)
+
+| Source | Domain | Endpoint | Auth |
+|--------|--------|----------|------|
+| yfinance | Stocks, Forex, Commodities | Yahoo Finance internal | None |
+| Kraken | Crypto OHLCV | api.kraken.com/0/public/ | None |
+| CoinGecko | Crypto Market | api.coingecko.com/api/v3/ | None |
+| Blockchain.com | BTC On-Chain | api.blockchain.info/ | None |
+| Alternative.me | Sentiment | api.alternative.me/fng/ | None |
+| Frankfurter | Forex Rates | api.frankfurter.dev/v1/ | None |
+| pandas-ta | Technical Indicators | Local computation | None |
 
 ---
 
 ## Test Results
 
-### 1. Unit Tests
+### Pipeline Performance
 
-| Test | Status | Details |
-|------|--------|---------|
-| LocalBandSDK - create_room | ✅ PASS | Room creation returns correct room_id |
-| LocalBandSDK - send_message | ✅ PASS | Messages stored with sender, text, type |
-| LocalBandSDK - get_room_history | ✅ PASS | Returns correct message history |
-| LocalBandSDK - get_history_formatted | ✅ PASS | Formatted with type prefixes |
-| DynamicAgentSquad - add_agent | ✅ PASS | Agents added with name and prompt |
-| DynamicAgentSquad - get_active_agents | ✅ PASS | Returns active agents only |
-| DynamicAgentSquad - to_list | ✅ PASS | Converts to list for UI display |
-| JSON Extraction - Direct parse | ✅ PASS | Raw JSON arrays/objects parsed |
-| JSON Extraction - Markdown blocks | ✅ PASS | ```json blocks extracted |
-| JSON Extraction - Embedded JSON | ✅ PASS | JSON found within text |
-| JSON Extraction - Empty/null | ✅ PASS | Returns None for invalid input |
-| Loop Detection - A->B->A->B | ✅ PASS | Alternating pattern detected |
-| Loop Detection - A->A->A->A | ✅ PASS | Repeating pattern detected |
-| Loop Detection - No loop | ✅ PASS | Normal sequence passes |
+| # | Domain | Depth | Agents | Time | Audit | Data Sources |
+|---|--------|-------|--------|------|-------|-------------|
+| 1 | Stocks | Quick | 3 | 80.1s | APPROVED | stocks |
+| 2 | Stocks | Standard | 6 | 52.3s | APPROVED | stocks |
+| 3 | Stocks | Deep | 12 | 60.8s | APPROVED | stocks |
+| 4 | Crypto | Quick | 3 | 58.4s | APPROVED | crypto |
+| 5 | Crypto | Standard | 6 | 49.0s | APPROVED | crypto |
+| 6 | Crypto | Deep | 12 | 59.4s | APPROVED | crypto |
+| 7 | Forex | Quick | 3 | 54.2s | APPROVED | forex |
+| 8 | Forex | Standard | 6 | 54.8s | APPROVED | forex |
+| 9 | Forex | Deep | 12 | 59.5s | APPROVED | forex |
 
-### 2. Integration Tests
+**Total Duration:** 528.6s (8.8 min)  
+**Average per Run:** 58.7s
 
-| Test | Status | Time | Details |
-|------|--------|------|---------|
-| API Connectivity | ✅ PASS | <1s | MiMo API responds correctly |
-| Agent Squad Generation | ✅ PASS | ~5s | Dynamic agents with custom prompts |
-| Orchestrator Decision | ✅ PASS | ~3s | Selects next agent or declares convergence |
-| Agent Contribution | ✅ PASS | ~15s | Agents provide domain-specific analysis |
-| Synthesis Engine | ✅ PASS | ~12s | Final report generated |
-| Audit Validation | ✅ PASS | ~5s | Report quality assessed |
-| Full Pipeline (Quick) | ✅ PASS | 130.4s | End-to-end execution successful |
+### Data Accuracy: v4.0 vs v5.0
 
-### 3. Pipeline Test Details
-
-**Query:** "Analyze BTC price trends"  
-**Depth:** Quick (max 4 turns)  
-**Execution Time:** 130.4 seconds (2.2 minutes)
-
-**Agent Squad Generated:**
-1. BTC_Technical_Analyst
-2. OnChain_Analyst
-3. Macro_Economist
-4. Market_Sentiment_Analyst
-5. Derivatives_Market_Analyst
-6. Liquidity_Analyst
-7. BTC_Cycle_Historian
-8. Cross_Asset_Correlation_Expert
-
-**Discussion Rounds:**
-| Round | Agent | Contribution |
-|-------|-------|--------------|
-| 1 | BTC_Technical_Analyst | Technical analysis with RSI, support/resistance |
-| 2 | BTC_Technical_Analyst | Updated price action analysis |
-| 3 | BTC_Technical_Analyst | Consolidation pattern analysis |
-| 4 | BTC_Technical_Analyst | Breakdown structure analysis |
-
-**Guardrail Triggered:** Loop detected (agent repeated 4x)  
-**Final Report:** 3,542 characters  
-**Audit Status:** APPROVED
+| Metric | v4.0 (no data) | v5.0 (live data) |
+|--------|----------------|-------------------|
+| NVDA price | Hallucinated ($131, $903, $131) | Real ($208.92, consistent) |
+| BTC price | Hallucinated ($52K-$57K) | Real ($63,353) |
+| EUR/USD | Hallucinated (1.0815) | Real (1.1538) |
+| RSI values | Fabricated | Computed from real OHLCV |
+| P/E ratios | Made up | Real (yfinance) |
+| Fear & Greed | "70 (Greed)" | "8 (Extreme Fear)" — real |
+| MVRV | Not mentioned | 0.675 (approx, labeled ~70%) |
+| Commodities | None | Gold $4,362, Oil $91, Silver $68 |
 
 ---
 
-## Adaptive Guardrail Performance
+## Bugs Fixed in v5.0
 
-### 1. Dynamic Turn Scaling
-- **Formula:** `max_turns = min(depth_rounds, MAX_TURNS)`
-- **MAX_TURNS:** 11 (based on 5-minute / 25-call budget)
-- **Quick:** 4 turns
-- **Standard:** 7 turns
-- **Deep:** 11 turns
-
-### 2. Loop Repetition Detection
-- **Window:** 4 speakers
-- **Patterns Detected:** A->B->A->B, A->A->A->A
-- **Action:** Force convergence + system injection
-- **Test Result:** ✅ Correctly triggered when BTC_Technical_Analyst repeated 4x
-
-### 3. Soft-Cap Graceful Fallback
-- **Trigger:** max_turns reached without convergence
-- **Action:** Synthesize with warning badge
-- **Test Result:** ✅ Not triggered (loop detection caught it first)
-
-### 4. Deadlock Prevention
-
-| Scenario | Prevention | Status |
-|----------|------------|--------|
-| Orchestrator returns empty | Fallback to first agent | ✅ Implemented |
-| Orchestrator picks invalid agent | Validation check | ✅ Implemented |
-| Agent returns empty | Return "CONVERGED" | ✅ Implemented |
-| Agent returns "CONVERGED" | Break loop | ✅ Implemented |
-| A->B->A->B loop | detect_loop() | ✅ Tested |
-| A->A->A->A loop | detect_loop() | ✅ Tested |
-| max_turns exceeded | Soft-cap fallback | ✅ Implemented |
-| All agents exhausted | Natural convergence | ✅ Implemented |
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| Unescaped `{}` in prompts | JSON examples in ORCHESTRATOR_DECOMPOSITION_PROMPT conflicted with `.format()` | Escaped to `{{}}` in bifas_agents.py |
+| Token truncation | `max_tokens=3000` too low for 6/12-agent JSON | Increased to `6000` in engine.py |
+| Quick mode data injection | Generic agent names didn't match tickers, fell back to first ticker only | Changed fallback to return ALL tickers' data |
 
 ---
 
-## API Call Budget Analysis
+## Dependencies
 
-### 2-Call-Per-Turn Model
+### requirements.txt
 
-| Phase | Calls | Fixed/Variable |
-|-------|-------|----------------|
-| 1. Topology Generator | 1 | Fixed |
-| 2. Orchestration Loop | 2 × turns | Variable |
-| 3. Synthesis Engine | 1 | Fixed |
-| 4. Audit | 1 | Fixed |
-| **Fixed Overhead** | **3** | |
+```
+streamlit
+openai
+python-dotenv
+yfinance>=1.4.0
+pandas-ta>=0.3.14b
+requests>=2.31.0
+```
 
-### Budget by Depth
+### Environment Variables
 
-| Depth | Turns | Phase 2 Calls | Total Calls | Est. Time |
-|-------|-------|---------------|-------------|-----------|
-| Quick | 4 | 8 | 11 | ~2.2 min |
-| Standard | 7 | 14 | 17 | ~3.4 min |
-| Deep | 11 | 22 | 25 | ~5.0 min |
+```env
+MIMO_API_KEY=your_mimo_api_key_here
+```
 
-### Actual Performance (Quick Test)
-
-| Metric | Expected | Actual |
-|--------|----------|--------|
-| Total Calls | 11 | ~11 |
-| Total Time | ~2.2 min | 2.2 min (130.4s) |
-| Avg per Call | 12s | ~11.8s |
-
----
-
-## Architecture Compliance
-
-| Requirement | Status | Implementation |
-|-------------|--------|----------------|
-| Dynamic Agent Generation | ✅ | Orchestrator creates custom agents per query |
-| Multi-Turn Group Chat | ✅ | Agents collaborate over multiple rounds |
-| Orchestrator Supervision | ✅ | Orchestrator selects speakers, judges convergence |
-| 2-Call-Per-Turn Model | ✅ | 1 orchestrator + 1 agent per turn |
-| Adaptive Guardrails | ✅ | Loop detection, soft-cap, dynamic scaling |
-| Deadlock Prevention | ✅ | All scenarios handled with fallbacks |
-| 5-Minute Budget | ✅ | MAX_TURNS=11 ensures ~5 min max |
-| Streamlit UI | ✅ | Depth selector, expandable rounds |
-| MiMo-V2.5pro | ✅ | Used for agent analysis |
-| LocalBandSDK | ✅ | In-memory room simulation |
+No other API keys required.
 
 ---
 
@@ -179,48 +112,42 @@ BIFAS has been successfully upgraded to the **Supervised Dynamic Group Chat Matr
 
 | File | Status | Changes |
 |------|--------|---------|
-| requirements.txt | ✅ | streamlit, openai, python-dotenv |
-| .env | ✅ | MIMO_API_KEY only |
-| config.py | ✅ | MiMo client configured |
-| bifas_agents.py | ✅ | AGENT_SPEAK_PROMPT, DEPTH_CONFIG updated |
-| engine.py | ✅ | 2-call model, adaptive guardrails |
-| app.py | ✅ | Depth selector, guardrail warnings |
-| TEST_REPORT.md | ✅ | This file |
+| requirements.txt | Updated | Added yfinance, pandas-ta, requests |
+| .env | OK | MIMO_API_KEY only |
+| config.py | OK | MiMo client configured |
+| data_fetcher.py | NEW | Domain detection, 7 API integrations, technicals, formatting |
+| bifas_agents.py | Updated | Added {market_data} to AGENT_TASK_PROMPT |
+| engine.py | Updated | Phase 0 data pre-fetch, modified execute_agent_task |
+| app.py | OK | Streamlit UI |
+| test_runner.py | Updated | v5.0 headers, data sources in metrics |
+| RAW_TEST_OUTPUT.md | Updated | Full raw output of all 9 runs with live data |
+| TEST_REPORT.md | Updated | This file |
+| README.md | Updated | v5.0 architecture, data sources, examples |
 
 ---
 
-## Known Issues & Resolutions
+## Test Queries
 
-| Issue | Resolution |
-|-------|------------|
-| Orchestrator selects same agent repeatedly | Loop detection triggers, forces convergence |
-| MiMo returns empty for complex prompts | Fallback mechanisms handle gracefully |
-| Agent squad size varies | MAX_AGENTS=8 cap prevents excessive agents |
-
----
-
-## Recommendations
-
-1. **Production Deployment:** Use Standard depth for most queries, Deep for complex M&A analysis
-2. **Orchestrator Prompt:** Consider enhancing to encourage agent diversity
-3. **Agent Deactivation:** Mark agents as inactive after they say CONVERGED
-4. **Cost Monitoring:** Track API calls per pipeline for budget management
+| Domain | Query |
+|--------|-------|
+| Stocks | "Analyze the current outlook for NVIDIA (NVDA), Apple (AAPL), and Microsoft (MSFT) stocks including technical indicators, valuation metrics, and growth prospects" |
+| Crypto | "Analyze Bitcoin (BTC) and Ethereum (ETH) price trends, on-chain metrics, and market sentiment for the current quarter" |
+| Forex | "Analyze Forex correlations and trends between EUR/USD, GBP/USD, and USD/JPY pairs including macroeconomic factors" |
 
 ---
 
 ## Conclusion
 
-BIFAS v3.0 successfully implements the Supervised Dynamic Group Chat Matrix architecture with:
+BIFAS v5.0 successfully integrates live market data from 7 keyless public APIs:
 
-- **Dynamic agent generation** tailored to each query
-- **Multi-turn collaborative discussions** with orchestrator supervision
-- **2-call-per-turn efficiency** fitting within 5-minute budget
-- **Adaptive guardrails** preventing deadlocks and infinite loops
-- **Graceful fallbacks** ensuring reports are always generated
+- **Stocks:** Real prices, P/E, PEG, EPS, technical indicators from yfinance + pandas-ta
+- **Crypto:** Real prices from Kraken/CoinGecko, on-chain from Blockchain.com, sentiment from Alternative.me
+- **Forex:** Real rates from yfinance/Frankfurter, commodity correlation context
+- **MVRV:** Approximate VWAP proxy with ~70% accuracy label
 
-All tests pass. The system is production-ready and deployable.
+All 9 test configurations pass. Reports now cite consistent, verifiable, real market data. The Sprint Architecture maintains ~58s average execution time with the addition of ~2-3s data pre-fetch.
 
 ---
 
 **Test Engineer:** MiMo-V2.5pro  
-**Date:** June 7, 2026
+**Date:** June 8, 2026
