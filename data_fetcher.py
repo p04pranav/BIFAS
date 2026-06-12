@@ -644,8 +644,10 @@ def _fetch_stock_bundle(ticker):
 def _fetch_crypto_bundle(coin_ids):
     market = fetch_crypto_market(coin_ids)
     sentiment = fetch_crypto_sentiment()
-    mvrv = fetch_crypto_mvrv("bitcoin") if "bitcoin" in coin_ids else {}
     onchain = fetch_crypto_onchain()
+    mvrv_data = {}
+    for cid in coin_ids:
+        mvrv_data[cid] = fetch_crypto_mvrv(cid)
     contexts = {}
     for cid in coin_ids:
         kraken_pair = KRAKEN_PAIR_MAP.get(cid)
@@ -655,8 +657,10 @@ def _fetch_crypto_bundle(coin_ids):
             if ohlcv is not None:
                 technicals = compute_technicals(ohlcv)
         coin_market = market.get(cid, {})
-        contexts[cid] = format_crypto_context(cid, coin_market, technicals, onchain, sentiment, mvrv)
-    return {"market": market, "onchain": onchain, "sentiment": sentiment, "mvrv": mvrv, "contexts": contexts}
+        coin_onchain = onchain if cid == "bitcoin" else {}
+        coin_mvrv = mvrv_data.get(cid, {})
+        contexts[cid] = format_crypto_context(cid, coin_market, technicals, coin_onchain, sentiment, coin_mvrv)
+    return {"market": market, "onchain": onchain, "sentiment": sentiment, "mvrv": mvrv_data, "contexts": contexts}
 
 
 def _fetch_forex_bundle(pairs):

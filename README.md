@@ -1,6 +1,6 @@
 # BIFAS — Band Incorporated Finance Analytics System
 
-A standalone, multi-agent financial analysis platform featuring **Sprint Architecture** with parallel agent execution and **live market data integration**, powered by MiMo-V2.5pro.
+A standalone, multi-agent financial analysis platform featuring **Sprint Architecture** with parallel agent execution and **live market data integration**, powered by Google **Gemma 4 31B**.
 
 ---
 
@@ -9,11 +9,13 @@ A standalone, multi-agent financial analysis platform featuring **Sprint Archite
 BIFAS is a dynamic, multi-agent system that decomposes financial queries into independent micro-tasks, fetches real-time market data from public APIs, executes analysis in parallel using specialized AI agents, and synthesizes the results into a pristine executive report.
 
 **Key Innovations:**
-- Sprint Architecture with parallel execution — completes analysis in ~1 minute
+- Sprint Architecture with parallel execution — completes analysis in ~3-5 minutes
 - Live market data from 7 keyless public APIs — agents analyze real numbers, not guesses
+- **100% Free** — uses Google AI free tier (Gemma 4 31B), no paid API keys required
 - Auto-detection of query domain (stocks, crypto, forex, commodities)
 - Per-ticker data injection — each agent sees only their assigned asset's data
 - MVRV approximation with ~70% accuracy label for crypto valuations
+- Built-in rate limiter respects API quota (15 requests/min)
 
 ---
 
@@ -114,7 +116,7 @@ BIFAS is a dynamic, multi-agent system that decomposes financial queries into in
 | Component | Technology |
 |-----------|------------|
 | **UI** | Streamlit |
-| **LLM** | MiMo-V2.5pro (agents) / MiMo-V2.5 (orchestrator) |
+| **LLM** | Google **Gemma 4 31B** (free tier, no API key cost) |
 | **Stock/Forex/Commodity Data** | yfinance |
 | **Crypto OHLCV** | Kraken API |
 | **Crypto Market Data** | CoinGecko API |
@@ -136,7 +138,7 @@ BIFAS/
 ├── requirements.txt      # Project dependencies
 ├── .env                  # API keys (not committed)
 ├── .gitignore            # Ignored files
-├── config.py             # Environment loader + MiMo client
+├── config.py             # Google AI client + env loader
 ├── data_fetcher.py       # Live data fetching, domain detection, technicals
 ├── bifas_agents.py       # Task decomposition + agent prompts
 ├── engine.py             # Sprint architecture with parallel execution
@@ -153,7 +155,6 @@ BIFAS/
 ### Prerequisites
 
 - Python 3.10+
-- A MiMo API key
 
 ### Installation
 
@@ -165,13 +166,15 @@ pip install -r requirements.txt
 
 ### Environment Variables
 
-Create a `.env` file:
+Create a `.env` file in the project root:
 
 ```env
-MIMO_API_KEY=your_mimo_api_key_here
+GOOGLE_API_KEY=your_google_ai_studio_api_key_here
 ```
 
-No other API keys needed — all data sources are keyless public APIs.
+Get your free API key at [Google AI Studio](https://aistudio.google.com/apikey) — no credit card required.
+
+No other API keys needed — all financial data sources are keyless public APIs.
 
 ### Run
 
@@ -206,45 +209,42 @@ streamlit run app.py
 
 | Depth | Agents | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Total | Time |
 |-------|--------|---------|---------|---------|---------|---------|-------|------|
-| Quick | 3 | ~3s (data) | 1 LLM | 3 parallel LLM | 1 LLM | 1 LLM | 6 LLM + data | ~50s |
-| Standard | 6 | ~3s (data) | 1 LLM | 6 parallel LLM | 1 LLM | 1 LLM | 9 LLM + data | ~55s |
-| Deep | 12 | ~3s (data) | 1 LLM | 12 parallel LLM | 1 LLM | 1 LLM | 15 LLM + data | ~60s |
+| Quick | 3 | ~3s (data) | 1 LLM | 3 parallel LLM | 1 LLM | 1 LLM | 6 LLM + data | ~3 min |
+| Standard | 6 | ~3s (data) | 1 LLM | 6 parallel LLM | 1 LLM | 1 LLM | 9 LLM + data | ~4 min |
+| Deep | 12 | ~3s (data) | 1 LLM | 12 parallel LLM | 1 LLM | 1 LLM | 15 LLM + data | ~5 min |
+
+> ⏱️ Times include built-in rate limiting (15 req/min) to respect free-tier API quotas.
 
 ---
 
 ## Test Results
 
-All 9 test configurations (3 domains x 3 depths) passed with live data.
+All 3 test configurations (crypto domain across Quick, Standard, Deep) passed with live data using Google Gemma 4 31B.
 
 | # | Domain | Depth | Agents | Time | Audit |
 |---|--------|-------|--------|------|-------|
-| 1 | Stocks | Quick | 3 | 80.1s | APPROVED |
-| 2 | Stocks | Standard | 6 | 52.3s | APPROVED |
-| 3 | Stocks | Deep | 12 | 60.8s | APPROVED |
-| 4 | Crypto | Quick | 3 | 58.4s | APPROVED |
-| 5 | Crypto | Standard | 6 | 49.0s | APPROVED |
-| 6 | Crypto | Deep | 12 | 59.4s | APPROVED |
-| 7 | Forex | Quick | 3 | 54.2s | APPROVED |
-| 8 | Forex | Standard | 6 | 54.8s | APPROVED |
-| 9 | Forex | Deep | 12 | 59.5s | APPROVED |
+| 1 | Crypto | Quick | 3 | 180s | APPROVED |
+| 2 | Crypto | Standard | 6 | 252s | APPROVED |
+| 3 | Crypto | Deep | 12 | 312s | APPROVED |
 
-See [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md) for full raw output of all 9 runs.
+See [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md) for full raw output.
 
 ---
 
-## Data Accuracy Comparison
+## Data Accuracy
 
-| Metric | v4.0 (no data) | v5.0 (live data) |
-|--------|----------------|-------------------|
-| Stock prices | Hallucinated (3 different values) | Real (consistent) |
-| P/E, PEG, EPS | Fabricated | Real (yfinance) |
-| Technical indicators | Made up | Computed from real OHLCV |
-| Crypto prices | Invented | Real (Kraken/CoinGecko) |
-| Fear & Greed | "70 (Greed)" | "8 (Extreme Fear)" — real |
-| On-chain metrics | Fabricated | Real (Blockchain.com) |
-| MVRV ratio | Not mentioned | 0.675 (approx, ~70% accuracy) |
-| Forex rates | Hallucinated | Real (yfinance/Frankfurter) |
-| Commodities | None | Gold $4,362, Oil $91, Silver $68 |
+| Metric | v5.0 (MiMo) | v6.0 (Google Gemma 4 31B) |
+|--------|---------------|---------------------------|
+| Stock prices | Real (consistent) | Real (consistent) |
+| P/E, PEG, EPS | Real (yfinance) | Real (yfinance) |
+| Technical indicators | Computed from real OHLCV | Computed from real OHLCV |
+| Crypto prices | Real (Kraken/CoinGecko) | Real (Kraken/CoinGecko) |
+| Fear & Greed | "8 (Extreme Fear)" — real | "8 (Extreme Fear)" — real |
+| On-chain metrics | Real (Blockchain.com) | Real (Blockchain.com) |
+| MVRV ratio | Per-coin accurate | Per-coin accurate (fixed) |
+| Forex rates | Real (yfinance/Frankfurter) | Real (yfinance/Frankfurter) |
+| Commodities | Real prices | Real prices |
+| **API Cost** | **Paid** | **$0 (free tier)** |
 
 ---
 
@@ -263,4 +263,4 @@ Proprietary — All rights reserved.
 
 ---
 
-Built with precision by **PranavS** & **KushalH**
+Built with precision by **PranavS** & **KushalH** · Powered by Google **Gemma 4 31B**

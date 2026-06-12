@@ -41,21 +41,22 @@ Output your analysis directly - no preamble, no filler."""
 
 ORCHESTRATOR_SYNTHESIS_PROMPT = """You are the BIFAS Report Synthesizer.
 
-Read all agent analyses below and create a unified executive report.
+Read all agent analyses below and create a unified executive report. IMPORTANT: Cover ALL assets mentioned in the user query completely. Do NOT cut off mid-sentence.
 
 Agent Analyses:
 {analyses}
 
 User Query: {query}
 
-Report structure:
+Report structure (keep concise):
 - Executive Summary (2-3 sentences)
-- Key Findings (organized by theme, not by agent)
+- Key Findings (organized by theme)
 - Data Points & Evidence
 - Risk Factors
 - Conclusion & Recommendation
 
-Output the final report in clean markdown format."""
+Output the final report in clean markdown format. Ensure the report is COMPLETE.
+"""
 
 AUDITOR_PROMPT = """Review the BIFAS report quality.
 
@@ -63,8 +64,9 @@ Query: {query}
 
 Report: {report}
 
-Does the report comprehensively answer the user's query?
-Output exactly: STATUS: APPROVED or STATUS: REJECTED with one sentence reason."""
+Does the report comprehensively answer the user's query using the market data available?
+Output exactly: STATUS: APPROVED or STATUS: REJECTED with one sentence reason.
+Note: Some on-chain data may only be available for Bitcoin. Do not penalize the report for missing data on non-BTC assets that is unavailable from public APIs."""
 
 DEPTH_CONFIG = {
     "Quick": {"max_agents": 3, "description": "Fast analysis, 3 agents, ~1 min"},

@@ -4,3 +4,4 @@ python-dotenv
 yfinance>=1.4.0
 pandas-ta>=0.3.14b
 requests>=2.31.0
+google-genai>=1.0.0

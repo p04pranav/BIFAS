@@ -53,7 +53,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">BIFAS</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Sprint Architecture — Parallel Agent Execution</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Sprint Architecture — Parallel Agent Execution · Google Gemma 4 31B</div>', unsafe_allow_html=True)
 
 query = st.text_area(
     "ENTER ANALYSIS DIRECTIVE",

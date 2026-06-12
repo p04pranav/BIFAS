@@ -2,7 +2,9 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from config import client
+from google.genai import types
 from bifas_agents import (
     ORCHESTRATOR_DECOMPOSITION_PROMPT,
     AGENT_TASK_PROMPT,
@@ -15,13 +17,32 @@ from data_fetcher import (
     get_ticker_data_for_agent
 )
 
-MODEL = "mimo-v2.5-pro"
-ORCHESTRATOR_MODEL = "mimo-v2.5"
+MODEL = "gemma-4-31b-it"
+ORCHESTRATOR_MODEL = "gemma-4-31b-it"
 
 # Sprint Architecture Constants
 TIMEOUT_SECONDS = 300  # 5-minute hard timeout
 MAX_AGENTS = 12
 RETRY_COUNT = 1  # Retry failed agents once
+
+# Rate limiter: 15 requests/min
+class RateLimiter:
+    def __init__(self, max_per_minute=15):
+        self.max_per_minute = max_per_minute
+        self.min_interval = 60.0 / max_per_minute
+        self.last_call = 0
+        self.lock = Lock()
+
+    def wait(self):
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_call
+            if elapsed < self.min_interval:
+                sleep_time = self.min_interval - elapsed
+                time.sleep(sleep_time)
+            self.last_call = time.time()
+
+rate_limiter = RateLimiter(15)
 
 
 def extract_json_from_response(raw_text):
@@ -120,15 +141,15 @@ class DynamicAgentSquad:
 
 def generate_tasks(user_query, max_agents):
     """Phase 1: Orchestrator decomposes query into micro-tasks."""
-    response = client.chat.completions.create(
+    rate_limiter.wait()
+    response = client.models.generate_content(
         model=ORCHESTRATOR_MODEL,
-        messages=[
-            {"role": "system", "content": ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)},
-            {"role": "user", "content": f"Decompose this query into {max_agents} independent micro-tasks:\n\n{user_query}"}
-        ],
-        max_tokens=6000
+        contents=f"{ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)}\n\nDecompose this query into {max_agents} independent micro-tasks:\n\n{user_query}",
+        config=types.GenerateContentConfig(
+            max_output_tokens=2048
+        )
     )
-    raw = response.choices[0].message.content.strip()
+    raw = response.text.strip()
 
     tasks = extract_json_from_response(raw)
     if tasks is None:
@@ -148,24 +169,25 @@ def generate_tasks(user_query, max_agents):
 def execute_agent_task(agent_name, task, query, market_data="No specific data available.", retry=0):
     """Phase 2: Single agent executes one task with market data context. Returns (name, result, success)."""
     try:
-        response = client.chat.completions.create(
+        rate_limiter.wait()
+        response = client.models.generate_content(
             model=MODEL,
-            messages=[
-                {"role": "system", "content": AGENT_TASK_PROMPT.format(
-                    name=agent_name,
-                    task=task,
-                    query=query,
-                    market_data=market_data
-                )},
-                {"role": "user", "content": "Provide your analysis now."}
-            ],
-            max_tokens=500
+            contents=f"{AGENT_TASK_PROMPT.format(
+                name=agent_name,
+                task=task,
+                query=query,
+                market_data=market_data
+            )}\n\nProvide your analysis now.",
+            config=types.GenerateContentConfig(
+                max_output_tokens=2048
+            )
         )
-        result = response.choices[0].message.content.strip()
+        result = response.text.strip()
         if result:
             return (agent_name, result, True)
     except Exception as e:
         if retry < RETRY_COUNT:
+            time.sleep(2)
             return execute_agent_task(agent_name, task, query, market_data, retry + 1)
 
     return (agent_name, "[AGENT FAILED]", False)
@@ -177,36 +199,39 @@ def synthesize_report(analyses, user_query):
         f"### {name}:\n{result}" for name, result in analyses.items()
     ])
 
-    response = client.chat.completions.create(
+    rate_limiter.wait()
+    response = client.models.generate_content(
         model=ORCHESTRATOR_MODEL,
-        messages=[
-            {"role": "system", "content": ORCHESTRATOR_SYNTHESIS_PROMPT.format(
-                analyses=analyses_text[:3000],
-                query=user_query
-            )},
-            {"role": "user", "content": "Generate the final BIFAS report in markdown."}
-        ],
-        max_tokens=2000
+        contents=f"{ORCHESTRATOR_SYNTHESIS_PROMPT.format(
+            analyses=analyses_text[:6000],
+            query=user_query
+        )}\n\nGenerate the final BIFAS report in markdown.",
+        config=types.GenerateContentConfig(
+            max_output_tokens=8192
+        )
     )
-    return response.choices[0].message.content.strip()
+    return response.text.strip()
 
 
 def audit_report(report, user_query):
     """Phase 4: Auditor validates the final report."""
-    try:
-        response = client.chat.completions.create(
-            model=ORCHESTRATOR_MODEL,
-            messages=[
-                {"role": "system", "content": "Review report quality. Output STATUS: APPROVED or STATUS: REJECTED."},
-                {"role": "user", "content": AUDITOR_PROMPT.format(query=user_query, report=report[:1500])}
-            ],
-            max_tokens=150
-        )
-        result = response.choices[0].message.content.strip()
-        if result:
-            return result
-    except Exception:
-        pass
+    for attempt in range(3):
+        try:
+            rate_limiter.wait()
+            response = client.models.generate_content(
+                model=ORCHESTRATOR_MODEL,
+                contents=f"Review report quality. Output STATUS: APPROVED or STATUS: REJECTED.\n\n{AUDITOR_PROMPT.format(query=user_query, report=report[:1500])}",
+                config=types.GenerateContentConfig(
+                    max_output_tokens=256
+                )
+            )
+            result = response.text.strip()
+            if result:
+                return result
+        except Exception:
+            if attempt < 2:
+                time.sleep(2)
+            continue
 
     return "STATUS: APPROVED (audit fallback)"
 
@@ -262,7 +287,7 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         analyses = {}
         failed_agents = []
 
-        with ThreadPoolExecutor(max_workers=max_agents) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_task = {
                 executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
                 for t in tasks

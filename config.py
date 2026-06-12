@@ -1,12 +1,9 @@
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+import google.genai as genai
 
 load_dotenv()
 
-MIMO_API_KEY = os.getenv("MIMO_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-client = OpenAI(
-    api_key=MIMO_API_KEY,
-    base_url="https://token-plan-sgp.xiaomimimo.com/v1"
-)
+client = genai.Client(api_key=GOOGLE_API_KEY)
