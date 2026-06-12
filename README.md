@@ -263,4 +263,4 @@ Proprietary — All rights reserved.
 
 ---
 
-Built with precision by **PranavS** & **KushalH** · Powered by Google **Gemma 4 31B**
+Built with precision by **PranavS** & **KushalH**
