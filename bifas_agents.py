@@ -56,6 +56,7 @@ Report structure (keep concise):
 - Conclusion & Recommendation
 
 Output the final report in clean markdown format. Ensure the report is COMPLETE.
+Do NOT stop mid-generation. Finish all sections completely.
 """
 
 AUDITOR_PROMPT = """Review the BIFAS report quality.

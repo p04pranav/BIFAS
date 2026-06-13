@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from config import client
 from google.genai import types
+from google.genai.errors import ServerError
 from bifas_agents import (
     ORCHESTRATOR_DECOMPOSITION_PROMPT,
     AGENT_TASK_PROMPT,
@@ -17,13 +18,25 @@ from data_fetcher import (
     get_ticker_data_for_agent
 )
 
+
+def _extract_text(response):
+    if response.text is not None:
+        return response.text
+    parts = response.candidates[0].content.parts
+    text_parts = [p.text for p in parts if not getattr(p, "thought", False) and p.text]
+    if text_parts:
+        return "".join(text_parts)
+    all_text = "".join(p.text for p in parts if p.text)
+    return all_text if all_text else ""
+
+
 MODEL = "gemma-4-31b-it"
 ORCHESTRATOR_MODEL = "gemma-4-31b-it"
 
 # Sprint Architecture Constants
 TIMEOUT_SECONDS = 300  # 5-minute hard timeout
 MAX_AGENTS = 12
-RETRY_COUNT = 1  # Retry failed agents once
+RETRY_COUNT = 2  # Retry failed agents twice
 
 # Rate limiter: 15 requests/min
 class RateLimiter:
@@ -141,15 +154,23 @@ class DynamicAgentSquad:
 
 def generate_tasks(user_query, max_agents):
     """Phase 1: Orchestrator decomposes query into micro-tasks."""
-    rate_limiter.wait()
-    response = client.models.generate_content(
-        model=ORCHESTRATOR_MODEL,
-        contents=f"{ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)}\n\nDecompose this query into {max_agents} independent micro-tasks:\n\n{user_query}",
-        config=types.GenerateContentConfig(
-            max_output_tokens=2048
-        )
-    )
-    raw = response.text.strip()
+    for attempt in range(3):
+        try:
+            rate_limiter.wait()
+            response = client.models.generate_content(
+                model=ORCHESTRATOR_MODEL,
+                contents=f"{ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)}\n\nDecompose this query into {max_agents} independent micro-tasks:\n\n{user_query}",
+                config=types.GenerateContentConfig(
+                    max_output_tokens=4096
+                )
+            )
+            raw = _extract_text(response).strip()
+            break
+        except Exception:
+            if attempt < 2:
+                time.sleep(10)
+                continue
+            raise
 
     tasks = extract_json_from_response(raw)
     if tasks is None:
@@ -179,12 +200,16 @@ def execute_agent_task(agent_name, task, query, market_data="No specific data av
                 market_data=market_data
             )}\n\nProvide your analysis now.",
             config=types.GenerateContentConfig(
-                max_output_tokens=2048
+                max_output_tokens=4096
             )
         )
-        result = response.text.strip()
+        result = _extract_text(response).strip()
         if result:
             return (agent_name, result, True)
+    except ServerError:
+        if retry < RETRY_COUNT:
+            time.sleep(10)
+            return execute_agent_task(agent_name, task, query, market_data, retry + 1)
     except Exception as e:
         if retry < RETRY_COUNT:
             time.sleep(2)
@@ -199,18 +224,28 @@ def synthesize_report(analyses, user_query):
         f"### {name}:\n{result}" for name, result in analyses.items()
     ])
 
-    rate_limiter.wait()
-    response = client.models.generate_content(
-        model=ORCHESTRATOR_MODEL,
-        contents=f"{ORCHESTRATOR_SYNTHESIS_PROMPT.format(
-            analyses=analyses_text[:6000],
-            query=user_query
-        )}\n\nGenerate the final BIFAS report in markdown.",
-        config=types.GenerateContentConfig(
-            max_output_tokens=8192
-        )
-    )
-    return response.text.strip()
+    for attempt in range(3):
+        try:
+            rate_limiter.wait()
+            response = client.models.generate_content(
+                model=ORCHESTRATOR_MODEL,
+                contents=f"{ORCHESTRATOR_SYNTHESIS_PROMPT.format(
+                    analyses=analyses_text[:12000],
+                    query=user_query
+                )}\n\nGenerate the final BIFAS report in markdown.\nCRITICAL: Complete the entire report fully without stopping mid-sentence.",
+                config=types.GenerateContentConfig(
+                    max_output_tokens=16384
+                )
+            )
+            result = _extract_text(response).strip()
+            if result:
+                return result
+        except Exception:
+            if attempt < 2:
+                time.sleep(10)
+                continue
+            raise
+    return ""
 
 
 def audit_report(report, user_query):
@@ -225,9 +260,13 @@ def audit_report(report, user_query):
                     max_output_tokens=256
                 )
             )
-            result = response.text.strip()
+            result = _extract_text(response).strip()
             if result:
                 return result
+        except ServerError:
+            if attempt < 2:
+                time.sleep(10)
+            continue
         except Exception:
             if attempt < 2:
                 time.sleep(2)
@@ -287,7 +326,7 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         analyses = {}
         failed_agents = []
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=6) as executor:
             future_to_task = {
                 executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
                 for t in tasks

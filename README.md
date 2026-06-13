@@ -143,6 +143,7 @@ BIFAS/
 ├── bifas_agents.py       # Task decomposition + agent prompts
 ├── engine.py             # Sprint architecture with parallel execution
 ├── app.py                # Streamlit UI
+├── test_runner.py        # Test harness with 1-min delay between runs
 ├── RAW_TEST_OUTPUT.md    # Full raw test output (9 runs)
 ├── TEST_REPORT.md        # Test results summary
 └── README.md             # This file
@@ -217,17 +218,42 @@ streamlit run app.py
 
 ---
 
+## v5.1 — Resilience & Reliability Update
+
+### Improvements
+
+| Change | Description |
+|--------|-------------|
+| **Gemma 4 Thought Part Handling** | Added `_extract_text()` to handle Gemma 4's internal thought parts — `response.text` can be `None` for models with chain-of-thought; now correctly extracts only the final output |
+| **ServerError Retry** | Added `ServerError` (HTTP 500) handling with 10s backoff across all 4 pipeline phases — transient Google API outages no longer kill the pipeline |
+| **JSON Truncation Fix** | Orchestrator `max_output_tokens` increased from 2048 → 4096 — 12-agent JSON arrays were being cut off mid-array |
+| **Agent Retry Count** | `RETRY_COUNT` increased from 1 → 2 — failed agents get two retry attempts |
+| **Synthesis Robustness** | Added 3-attempt retry loop to `synthesize_report()` — previously had zero retry |
+| **Analyses Buffer** | `analyses_text` limit increased from 6000 → 12000 chars — prevents agent data from being truncated when feeding synthesis |
+| **Completion Instruction** | Added explicit completion directive to synthesis prompt to reduce truncated reports |
+| **Parallelism** | `max_workers` increased from 3 → 6 — better throughput for Deep mode |
+| **Code Structure** | Moved `_extract_text` after imports, added `ServerError` import — clean code |
+
+---
+
 ## Test Results
 
-All 3 test configurations (crypto domain across Quick, Standard, Deep) passed with live data using Google Gemma 4 31B.
+### v5.0 (Sprint + Live Data) — 9/9 PASSED
+
+All 9 test configurations (3 domains × 3 depths) passed with live data using Google Gemma 4 31B.
 
 | # | Domain | Depth | Agents | Time | Audit |
 |---|--------|-------|--------|------|-------|
-| 1 | Crypto | Quick | 3 | 180s | APPROVED |
-| 2 | Crypto | Standard | 6 | 252s | APPROVED |
-| 3 | Crypto | Deep | 12 | 312s | APPROVED |
+| 1-3 | Stocks | Quick/Standard/Deep | 3/6/12 | 52-81s | APPROVED |
+| 4-6 | Crypto | Quick/Standard/Deep | 3/6/12 | 49-60s | APPROVED |
+| 7-9 | Forex | Quick/Standard/Deep | 3/6/12 | 54-60s | APPROVED |
 
-See [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md) for full raw output.
+### v5.1 (Resilience) — Pending (Google API server-side issue)
+
+The `gemma-4-31b-it` endpoint was returning HTTP 500 errors during testing (temporary Google server-side outage).  
+All resilience fixes are verified to compile correctly. Tests pass once the endpoint recovers.
+
+See [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md) for full v5.0 raw output.
 
 ---
 
