@@ -88,3 +88,35 @@ def test_auditor_failure_is_unverified_not_approved(monkeypatch):
         raise RuntimeError("down")
     monkeypatch.setattr(engine, "generate", broken)
     assert engine.audit_report("report", "query").startswith("STATUS: UNVERIFIED")
+
+
+def test_progress_events_in_order(offline_pipeline):
+    offline_pipeline(agent_names=["NVDA_Tech", "Macro"])
+    events = []
+    engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=lambda t, d: events.append((t, d)))
+    types = [t for t, _ in events]
+    assert types[:5] == ["phase", "data", "phase", "tasks", "phase"]
+    assert [d["name"] for t, d in events if t == "phase"] == ["data", "decompose", "agents", "synthesis", "audit"]
+    assert sorted(d["name"] for t, d in events if t == "agent") == ["Macro", "NVDA_Tech"]
+    assert all(d["status"] == "done" and d["text"] for t, d in events if t == "agent")
+    assert types[-3:] == ["report", "phase", "audit"]
+    assert events[-1][1]["status"].startswith("STATUS: APPROVED")
+
+
+def test_timed_out_agents_emit_skipped(offline_pipeline, monkeypatch):
+    offline_pipeline(agent_names=["Fast", "Slow"], slow_agent="Slow")
+    monkeypatch.setattr(engine, "TIMEOUT_SECONDS", 3)
+    monkeypatch.setattr(engine, "FINISH_RESERVE_SECONDS", 1)
+    events = []
+    engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=lambda t, d: events.append((t, d)))
+    statuses = {d["name"]: d["status"] for t, d in events if t == "agent"}
+    assert statuses == {"Fast": "done", "Slow": "skipped"}
+
+
+def test_failing_listener_does_not_break_run(offline_pipeline):
+    offline_pipeline(agent_names=["A"])
+
+    def listener(event_type, data):
+        raise RuntimeError("UI crashed")
+    result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=listener)
+    assert result["audit_status"].startswith("STATUS: APPROVED")
