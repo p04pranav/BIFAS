@@ -1,6 +1,8 @@
 import streamlit as st
+import config
 from engine import run_bifas_pipeline
 from bifas_agents import DEPTH_CONFIG
+from llm import usage_snapshot
 
 st.set_page_config(
     page_title="BIFAS",
@@ -42,18 +44,11 @@ st.markdown("""
         border-color: #00f0ff;
         box-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
     }
-    .report-block {
-        background-color: #0f0f1a;
-        border: 1px solid #1a1a2e;
-        border-radius: 6px;
-        padding: 1.5rem;
-        font-family: 'Courier New', monospace;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">BIFAS</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Sprint Architecture — Parallel Agent Execution · Google Gemma 4 31B</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Sprint Architecture — Parallel Agent Execution · Gemini 3.5 Flash Lite</div>', unsafe_allow_html=True)
 
 query = st.text_area(
     "ENTER ANALYSIS DIRECTIVE",
@@ -73,6 +68,12 @@ with col_button:
     st.write("")
     run_clicked = st.button("Initialize BIFAS Sprint", type="primary", use_container_width=True)
 
+usage = usage_snapshot()
+st.caption(
+    f"Model: {usage['primary_model']} · Requests today: {usage['used']} / {usage['limit']}"
+    + (f" · Daily quota reached — using fallback {usage['fallback_model']}" if usage["fallback_active"] else "")
+)
+
 if run_clicked:
     if not query.strip():
         st.warning("Enter a query to initiate analysis.")
@@ -87,6 +88,11 @@ if run_clicked:
         # Guardrail Warning
         if result.get("guardrail_triggered"):
             st.warning(f"⚠️ {result['guardrail_triggered']}")
+        if result.get("fallback_used"):
+            st.info(
+                f"ℹ️ {config.PRIMARY_MODEL} quota was exhausted, so part or all of this run "
+                f"used the fallback model ({', '.join(result.get('models_used', []))})."
+            )
 
         col_left, col_right = st.columns([1, 2])
 
@@ -118,10 +124,11 @@ if run_clicked:
             st.subheader("Agent Contributions")
             for round_data in result.get("rounds", []):
                 agent_name = round_data.get("next_agent", "Unknown")
-                contribution = round_data.get("contribution", "N/A")
+                contribution = round_data.get("contribution_full") or round_data.get("contribution", "N/A")
                 with st.expander(f"📊 {agent_name}", expanded=False):
-                    st.write(contribution)
+                    st.markdown(contribution)
 
             st.subheader("Final Report")
             report = result.get("final_report", "No report generated.")
-            st.markdown(f'<div class="report-block">{report}</div>', unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown(report)
