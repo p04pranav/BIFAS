@@ -133,3 +133,10 @@ def test_market_snapshot_skips_errors_and_is_json_safe():
     assert [e["symbol"] for e in snap] == ["ODD", "JPY=X"]
     json.dumps(snap, allow_nan=False)  # no NaN/inf leaks into the API
     assert d.market_snapshot({}, ["stocks", "crypto"]) == []
+
+
+def test_extract_tickers_without_defaults():
+    q = "What is the crypto and forex outlook?"
+    doms = d.detect_domains(q)
+    assert d.extract_tickers(q, doms, defaults=False) == {}
+    assert d.extract_tickers(q, doms)["crypto"] == ["bitcoin", "ethereum"]

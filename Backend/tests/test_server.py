@@ -107,3 +107,21 @@ def test_frontend_is_served(client):
     res = client.get("/")
     assert res.status_code == 200 and "BIFAS" in res.text
     assert client.get("/app.js").status_code == 200
+
+
+def test_preview_reports_assets_and_costs(client):
+    body = client.get("/api/preview", params={"query": "Analyze NVDA and gold"}).json()
+    assert body["domains"] == ["stocks", "commodities"]
+    assert body["named"]["stocks"] == ["NVDA"] and body["named"]["commodities"] == ["GC=F"]
+    assert body["estimates"] == {"Quick": 6, "Standard": 9, "Deep": 15}
+
+
+def test_preview_separates_defaults_from_named_assets(client):
+    body = client.get("/api/preview", params={"query": "How is crypto sentiment?"}).json()
+    assert body["tickers"]["crypto"] == ["bitcoin", "ethereum"]  # what would be analyzed
+    assert body["named"] == {}                                    # nothing was actually named
+
+
+def test_preview_empty_query(client):
+    body = client.get("/api/preview", params={"query": "  "}).json()
+    assert body["domains"] == [] and body["estimates"]["Deep"] == 15

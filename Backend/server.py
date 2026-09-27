@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from bifas_agents import DEPTH_CONFIG
+from data_fetcher import detect_domains, extract_tickers
 from engine import run_bifas_pipeline
 from llm import usage_snapshot
 
@@ -52,6 +53,30 @@ def health():
 @app.get("/api/meta")
 def meta():
     return {"depths": DEPTH_CONFIG, "usage": usage_snapshot(), "examples": EXAMPLE_QUERIES}
+
+
+# Model calls per run besides the agents: decomposition, synthesis, audit.
+FIXED_CALLS_PER_RUN = 3
+
+
+def estimate_requests(depth):
+    return DEPTH_CONFIG[depth]["max_agents"] + FIXED_CALLS_PER_RUN
+
+
+@app.get("/api/preview")
+def preview(query: str = Query("", max_length=MAX_QUERY_CHARS)):
+    """What a question would analyze and cost, using only local keyword matching (no AI or network)."""
+    query = query.strip()
+    estimates = {name: estimate_requests(name) for name in DEPTH_CONFIG}
+    if not query:
+        return {"domains": [], "tickers": {}, "named": {}, "estimates": estimates}
+    domains = detect_domains(query)
+    return {
+        "domains": domains,
+        "tickers": extract_tickers(query, domains),
+        "named": extract_tickers(query, domains, defaults=False),
+        "estimates": estimates,
+    }
 
 
 def _public_result(result):

@@ -148,7 +148,8 @@ def detect_domains(query):
     return detected
 
 
-def extract_tickers(query, domains):
+def extract_tickers(query, domains, defaults=True):
+    """Assets named in the query per domain; with defaults, domains naming none get common defaults."""
     q = query.lower()
     tickers = {}
     if "stocks" in domains:
@@ -172,25 +173,28 @@ def extract_tickers(query, domains):
         for name, cg_id in CRYPTO_MAP.items():
             if _has_term(q, name):
                 cryptos.append(cg_id)
-        if not cryptos:
+        if not cryptos and defaults:
             cryptos = ["bitcoin", "ethereum"]
-        tickers["crypto"] = list(dict.fromkeys(cryptos))
+        if cryptos:
+            tickers["crypto"] = list(dict.fromkeys(cryptos))
     if "forex" in domains:
         pairs = []
         for name, yf_sym in FOREX_YF_MAP.items():
             if _has_term(q, name):
                 pairs.append(yf_sym)
-        if not pairs:
+        if not pairs and defaults:
             pairs = ["EURUSD=X", "GBPUSD=X", "JPY=X"]
-        tickers["forex"] = list(dict.fromkeys(pairs))
+        if pairs:
+            tickers["forex"] = list(dict.fromkeys(pairs))
     if "commodities" in domains:
         commodities = []
         for name, yf_sym in COMMODITY_YF_MAP.items():
             if _has_term(q, name):
                 commodities.append(yf_sym)
-        if not commodities:
+        if not commodities and defaults:
             commodities = ["GC=F", "CL=F"]
-        tickers["commodities"] = list(dict.fromkeys(commodities))
+        if commodities:
+            tickers["commodities"] = list(dict.fromkeys(commodities))
     return tickers
 
 
