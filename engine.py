@@ -1,11 +1,8 @@
-import json
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
-from config import client
-from google.genai import types
-from google.genai.errors import ServerError
+from pydantic import BaseModel
+import config
+from llm import generate, extract_json_from_response
 from bifas_agents import (
     ORCHESTRATOR_DECOMPOSITION_PROMPT,
     AGENT_TASK_PROMPT,
@@ -18,78 +15,17 @@ from data_fetcher import (
     get_ticker_data_for_agent
 )
 
-
-def _extract_text(response):
-    if response.text is not None:
-        return response.text
-    parts = response.candidates[0].content.parts
-    text_parts = [p.text for p in parts if not getattr(p, "thought", False) and p.text]
-    if text_parts:
-        return "".join(text_parts)
-    all_text = "".join(p.text for p in parts if p.text)
-    return all_text if all_text else ""
-
-
-MODEL = "gemma-4-31b-it"
-ORCHESTRATOR_MODEL = "gemma-4-31b-it"
-
 # Sprint Architecture Constants
 TIMEOUT_SECONDS = 300  # 5-minute hard timeout
 MAX_AGENTS = 12
-RETRY_COUNT = 2  # Retry failed agents twice
-
-# Rate limiter: 15 requests/min
-class RateLimiter:
-    def __init__(self, max_per_minute=15):
-        self.max_per_minute = max_per_minute
-        self.min_interval = 60.0 / max_per_minute
-        self.last_call = 0
-        self.lock = Lock()
-
-    def wait(self):
-        with self.lock:
-            now = time.time()
-            elapsed = now - self.last_call
-            if elapsed < self.min_interval:
-                sleep_time = self.min_interval - elapsed
-                time.sleep(sleep_time)
-            self.last_call = time.time()
-
-rate_limiter = RateLimiter(15)
+MAX_WORKERS = 6
+MAX_ANALYSES_CHARS = 60000
 
 
-def extract_json_from_response(raw_text):
-    """Extract JSON from response, handling markdown code blocks and empty responses."""
-    if not raw_text:
-        return None
-
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        pass
-
-    json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', raw_text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    json_match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
-
-    json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return None
+class Task(BaseModel):
+    agent_name: str
+    task: str
+    domain: str
 
 
 class LocalBandSDK:
@@ -153,69 +89,46 @@ class DynamicAgentSquad:
 
 
 def generate_tasks(user_query, max_agents):
-    """Phase 1: Orchestrator decomposes query into micro-tasks."""
-    for attempt in range(3):
-        try:
-            rate_limiter.wait()
-            response = client.models.generate_content(
-                model=ORCHESTRATOR_MODEL,
-                contents=f"{ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)}\n\nDecompose this query into {max_agents} independent micro-tasks:\n\n{user_query}",
-                config=types.GenerateContentConfig(
-                    max_output_tokens=4096
-                )
-            )
-            raw = _extract_text(response).strip()
+    """Phase 1: Orchestrator decomposes query into micro-tasks. Returns (tasks, LLMResult)."""
+    prompt = (
+        ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)
+        + f"\n\nDecompose this query into {max_agents} independent micro-tasks:\n\n{user_query}"
+    )
+    for attempt in range(2):
+        response = generate(prompt, max_tokens=4096, schema=list[Task], thinking="low")
+        tasks = response.parsed
+        if tasks:
             break
-        except Exception:
-            if attempt < 2:
-                time.sleep(10)
-                continue
-            raise
-
-    tasks = extract_json_from_response(raw)
-    if tasks is None:
-        raise ValueError(f"Failed to parse tasks: {raw[:200]}")
+    if not tasks:
+        raise ValueError(f"Failed to parse tasks: {response.text[:200]}")
 
     valid_tasks = []
+    seen = set()
     for t in tasks[:max_agents]:
-        if isinstance(t, dict) and "agent_name" in t and "task" in t:
-            valid_tasks.append(t)
+        if t.agent_name and t.task and t.agent_name not in seen:
+            seen.add(t.agent_name)
+            valid_tasks.append(t.model_dump())
 
     if len(valid_tasks) == 0:
         raise ValueError("No valid tasks generated")
 
-    return valid_tasks
+    return valid_tasks, response
 
 
-def execute_agent_task(agent_name, task, query, market_data="No specific data available.", retry=0):
-    """Phase 2: Single agent executes one task with market data context. Returns (name, result, success)."""
+def execute_agent_task(agent_name, task, query, market_data="No specific data available."):
+    """Phase 2: Single agent executes one task with market data context.
+
+    Returns (name, result, success, model)."""
+    prompt = AGENT_TASK_PROMPT.format(
+        name=agent_name, task=task, query=query, market_data=market_data
+    ) + "\n\nProvide your analysis now."
     try:
-        rate_limiter.wait()
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=f"{AGENT_TASK_PROMPT.format(
-                name=agent_name,
-                task=task,
-                query=query,
-                market_data=market_data
-            )}\n\nProvide your analysis now.",
-            config=types.GenerateContentConfig(
-                max_output_tokens=4096
-            )
-        )
-        result = _extract_text(response).strip()
-        if result:
-            return (agent_name, result, True)
-    except ServerError:
-        if retry < RETRY_COUNT:
-            time.sleep(10)
-            return execute_agent_task(agent_name, task, query, market_data, retry + 1)
-    except Exception as e:
-        if retry < RETRY_COUNT:
-            time.sleep(2)
-            return execute_agent_task(agent_name, task, query, market_data, retry + 1)
-
-    return (agent_name, "[AGENT FAILED]", False)
+        response = generate(prompt, max_tokens=2048, thinking="low")
+        if response.text:
+            return (agent_name, response.text, True, response.model)
+    except Exception:
+        pass
+    return (agent_name, "[AGENT FAILED]", False, None)
 
 
 def synthesize_report(analyses, user_query):
@@ -223,55 +136,27 @@ def synthesize_report(analyses, user_query):
     analyses_text = "\n\n".join([
         f"### {name}:\n{result}" for name, result in analyses.items()
     ])
-
-    for attempt in range(3):
-        try:
-            rate_limiter.wait()
-            response = client.models.generate_content(
-                model=ORCHESTRATOR_MODEL,
-                contents=f"{ORCHESTRATOR_SYNTHESIS_PROMPT.format(
-                    analyses=analyses_text[:12000],
-                    query=user_query
-                )}\n\nGenerate the final BIFAS report in markdown.\nCRITICAL: Complete the entire report fully without stopping mid-sentence.",
-                config=types.GenerateContentConfig(
-                    max_output_tokens=16384
-                )
-            )
-            result = _extract_text(response).strip()
-            if result:
-                return result
-        except Exception:
-            if attempt < 2:
-                time.sleep(10)
-                continue
-            raise
-    return ""
+    prompt = ORCHESTRATOR_SYNTHESIS_PROMPT.format(
+        analyses=analyses_text[:MAX_ANALYSES_CHARS], query=user_query
+    ) + (
+        "\n\nGenerate the final BIFAS report in markdown."
+        "\nCRITICAL: Complete the entire report fully without stopping mid-sentence."
+    )
+    return generate(prompt, max_tokens=8192, thinking="low").text
 
 
 def audit_report(report, user_query):
     """Phase 4: Auditor validates the final report."""
-    for attempt in range(3):
-        try:
-            rate_limiter.wait()
-            response = client.models.generate_content(
-                model=ORCHESTRATOR_MODEL,
-                contents=f"Review report quality. Output STATUS: APPROVED or STATUS: REJECTED.\n\n{AUDITOR_PROMPT.format(query=user_query, report=report[:1500])}",
-                config=types.GenerateContentConfig(
-                    max_output_tokens=256
-                )
-            )
-            result = _extract_text(response).strip()
-            if result:
-                return result
-        except ServerError:
-            if attempt < 2:
-                time.sleep(10)
-            continue
-        except Exception:
-            if attempt < 2:
-                time.sleep(2)
-            continue
-
+    prompt = (
+        "Review report quality. Output STATUS: APPROVED or STATUS: REJECTED.\n\n"
+        + AUDITOR_PROMPT.format(query=user_query, report=report)
+    )
+    try:
+        result = generate(prompt, max_tokens=256, thinking="minimal").text
+        if result:
+            return result
+    except Exception:
+        pass
     return "STATUS: APPROVED (audit fallback)"
 
 
@@ -291,8 +176,11 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         "audit_status": "",
         "total_messages": 0,
         "guardrail_triggered": None,
-        "execution_time": 0
+        "execution_time": 0,
+        "models_used": [],
+        "fallback_used": False,
     }
+    models = set()
 
     try:
         # PHASE 0: Domain Detection + Data Pre-Fetch
@@ -302,7 +190,8 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         result["data_sources"] = list(tickers_map.keys())
 
         # PHASE 1: Task Decomposition (1 call)
-        tasks = generate_tasks(user_query, max_agents)
+        tasks, decomposition = generate_tasks(user_query, max_agents)
+        models.add(decomposition.model)
         result["tasks"] = tasks
         result["agent_squad"] = [{"name": t["agent_name"], "prompt": t["task"]} for t in tasks]
 
@@ -326,7 +215,7 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         analyses = {}
         failed_agents = []
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(tasks), MAX_WORKERS)) as executor:
             future_to_task = {
                 executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
                 for t in tasks
@@ -341,14 +230,16 @@ def run_bifas_pipeline(user_query, depth="Standard"):
 
                 task = future_to_task[future]
                 try:
-                    agent_name, result_text, success = future.result(timeout=60)
+                    agent_name, result_text, success, model = future.result(timeout=60)
                     if success:
+                        models.add(model)
                         analyses[agent_name] = result_text
                         band.send_message(room_id, agent_name, result_text, msg_type="contribution")
                         result["rounds"].append({
                             "round": len(result["rounds"]) + 1,
                             "next_agent": agent_name,
-                            "contribution": result_text[:300]
+                            "contribution": result_text[:300],
+                            "contribution_full": result_text,
                         })
                     else:
                         failed_agents.append(agent_name)
@@ -393,5 +284,8 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         result["audit_status"] = f"Pipeline error: {str(e)}"
         result["execution_time"] = time.time() - start_time
         raise
+    finally:
+        result["models_used"] = sorted(models)
+        result["fallback_used"] = any(m != config.PRIMARY_MODEL for m in models)
 
     return result
