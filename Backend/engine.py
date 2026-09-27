@@ -1,5 +1,5 @@
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, TimeoutError as FuturesTimeout
 from typing import Literal
 from pydantic import BaseModel
 import config
@@ -21,6 +21,7 @@ TIMEOUT_SECONDS = 300  # 5-minute hard timeout
 MAX_AGENTS = 12
 MAX_WORKERS = 6
 FINISH_RESERVE_SECONDS = 60  # time kept back from agents for synthesis + audit
+POLL_SECONDS = 0.2  # how often waits check for cancellation
 MAX_ANALYSES_CHARS = 60000
 
 
@@ -164,17 +165,33 @@ def audit_report(report, user_query):
     return "STATUS: UNVERIFIED — auditor unavailable"
 
 
-def _run_before(deadline, fn, *args):
-    """Run fn(*args), giving up (returning None) if it is still running at the deadline."""
-    remaining = deadline - time.time()
-    if remaining <= 0:
+class _Cancelled(Exception):
+    """The caller asked the run to stop (e.g. the client disconnected)."""
+
+
+def _check_cancel(cancel_event):
+    if cancel_event is not None and cancel_event.is_set():
+        raise _Cancelled()
+
+
+def _run_before(deadline, fn, *args, cancel_event=None):
+    """Run fn(*args), giving up (returning None) if it is still running at the deadline.
+
+    Raises _Cancelled as soon as cancel_event is set."""
+    if deadline - time.time() <= 0:
         return None
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(fn, *args)
     try:
-        return future.result(timeout=remaining)
-    except FuturesTimeout:
-        return None
+        while True:
+            _check_cancel(cancel_event)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return None
+            try:
+                return future.result(timeout=min(remaining, POLL_SECONDS))
+            except FuturesTimeout:
+                continue
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -191,14 +208,16 @@ def _event_emitter(on_event):
     return emit
 
 
-def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
+def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event=None):
     """
     Sprint-based pipeline with parallel execution.
     Hard 5-minute timeout. Agent count controls depth.
 
     on_event(type, data) is called as the run progresses:
     phase(name) when a phase starts, data(domains, tickers), market(assets), tasks(agents),
-    agent(name, status, text, model), report(markdown), audit(status).
+    agent(name, status, text, model), report(markdown), audit(status),
+    and cancelled() if cancel_event (a threading.Event) is set mid-run. A cancelled
+    run stops before its next model call and returns with result["cancelled"] = True.
     """
     emit = _event_emitter(on_event)
     start_time = time.time()
@@ -216,6 +235,7 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
         "models_used": [],
         "fallback_used": False,
         "market_snapshot": [],
+        "cancelled": False,
     }
     models = set()
     guardrails = []
@@ -231,10 +251,12 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
         emit("data", domains=domains, tickers=tickers_map)
         result["market_snapshot"] = market_snapshot(market_data, domains, tickers_map)
         emit("market", assets=result["market_snapshot"])
+        _check_cancel(cancel_event)
 
         # PHASE 1: Task Decomposition (1 call)
         emit("phase", name="decompose")
-        decomposed = _run_before(deadline - FINISH_RESERVE_SECONDS, generate_tasks, user_query, max_agents)
+        decomposed = _run_before(deadline - FINISH_RESERVE_SECONDS, generate_tasks, user_query, max_agents,
+                                 cancel_event=cancel_event)
         if decomposed is None:
             guardrails.append("Timeout during task decomposition")
             result["final_report"] = "No analysis completed before the time limit."
@@ -263,31 +285,41 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
         agent_deadline = deadline - FINISH_RESERVE_SECONDS
         emit("phase", name="agents")
 
+        def _record_agent(outcome):
+            agent_name, result_text, success, model = outcome
+            if success:
+                models.add(model)
+                analyses[agent_name] = result_text
+                band.send_message(room_id, agent_name, result_text, msg_type="contribution")
+                result["rounds"].append({
+                    "round": len(result["rounds"]) + 1,
+                    "next_agent": agent_name,
+                    "contribution": result_text[:300],
+                    "contribution_full": result_text,
+                })
+                emit("agent", name=agent_name, status="done", text=result_text, model=model)
+            else:
+                failed_agents.append(agent_name)
+                emit("agent", name=agent_name, status="failed", text="", model=None)
+                band.send_message(room_id, agent_name, "[FAILED]", msg_type="request")
+
         executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_WORKERS))
         future_to_task = {
             executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
             for t in tasks
         }
+        pending = set(future_to_task)
         try:
-            for future in as_completed(future_to_task, timeout=max(0, agent_deadline - time.time())):
-                agent_name, result_text, success, model = future.result()
-                if success:
-                    models.add(model)
-                    analyses[agent_name] = result_text
-                    band.send_message(room_id, agent_name, result_text, msg_type="contribution")
-                    result["rounds"].append({
-                        "round": len(result["rounds"]) + 1,
-                        "next_agent": agent_name,
-                        "contribution": result_text[:300],
-                        "contribution_full": result_text,
-                    })
-                    emit("agent", name=agent_name, status="done", text=result_text, model=model)
-                else:
-                    failed_agents.append(agent_name)
-                    emit("agent", name=agent_name, status="failed", text="", model=None)
-                    band.send_message(room_id, agent_name, "[FAILED]", msg_type="request")
+            while pending:
+                _check_cancel(cancel_event)
+                remaining = agent_deadline - time.time()
+                if remaining <= 0:
+                    raise FuturesTimeout()
+                done, pending = wait(pending, timeout=min(remaining, POLL_SECONDS), return_when=FIRST_COMPLETED)
+                for future in done:
+                    _record_agent(future.result())
         except FuturesTimeout:
-            unfinished = [t["agent_name"] for f, t in future_to_task.items() if not f.done()]
+            unfinished = [future_to_task[f]["agent_name"] for f in pending]
             guardrails.append(f"Timeout during agent execution — skipped: {', '.join(unfinished)}")
             for name in unfinished:
                 emit("agent", name=name, status="skipped", text="", model=None)
@@ -300,8 +332,9 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
 
         # PHASE 3: Synthesis (1 call)
         if analyses:
+            _check_cancel(cancel_event)
             emit("phase", name="synthesis")
-            final_report = _run_before(deadline, synthesize_report, analyses, user_query)
+            final_report = _run_before(deadline, synthesize_report, analyses, user_query, cancel_event=cancel_event)
             if final_report is None:
                 guardrails.append("Timeout during synthesis — showing raw agent analyses")
                 final_report = "\n\n".join(f"### {name}\n{text}" for name, text in analyses.items())
@@ -311,8 +344,9 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
 
             # PHASE 4: Audit (1 call)
             if not result["audit_status"]:
+                _check_cancel(cancel_event)
                 emit("phase", name="audit")
-                audit = _run_before(deadline, audit_report, final_report, user_query)
+                audit = _run_before(deadline, audit_report, final_report, user_query, cancel_event=cancel_event)
                 if audit is None:
                     guardrails.append("Timeout during audit")
                     audit = "Skipped - timeout"
@@ -324,6 +358,11 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
 
         result["total_messages"] = len(band.get_room_history(room_id))
 
+    except _Cancelled:
+        result["cancelled"] = True
+        result["audit_status"] = "Cancelled"
+        guardrails.append("Cancelled")
+        emit("cancelled")
     except Exception as e:
         result["audit_status"] = f"Pipeline error: {str(e)}"
         raise

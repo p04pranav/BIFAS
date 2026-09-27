@@ -131,3 +131,41 @@ def test_market_snapshot_in_result_and_event(offline_pipeline, monkeypatch):
     result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=lambda t, d: events.append((t, d)))
     assert result["market_snapshot"] == fake_snapshot
     assert ("market", {"assets": fake_snapshot}) in events
+
+
+def test_cancel_during_agents_skips_synthesis_and_audit(monkeypatch):
+    import threading
+    monkeypatch.setattr(engine, "fetch_all_data", lambda domains, tickers: {})
+    cancel = threading.Event()
+    calls = []
+
+    def fake_generate(prompt, *, max_tokens, schema=None, thinking="low"):
+        if schema is not None and schema is not engine.Verdict:
+            return _result(parsed=[engine.Task(agent_name=n, task="t", domain="d") for n in ("A", "B")])
+        if "BIFAS Report Synthesizer" in prompt or schema is engine.Verdict:
+            calls.append("synthesis-or-audit")
+        cancel.set()          # the client leaves while agents are working
+        time.sleep(0.5)
+        return _result(text="analysis")
+    monkeypatch.setattr(engine, "generate", fake_generate)
+    events = []
+    start = time.time()
+    result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=lambda t, d: events.append(t),
+                                       cancel_event=cancel)
+    assert result["cancelled"] is True and result["audit_status"] == "Cancelled"
+    assert calls == []
+    assert "cancelled" in events and "report" not in events
+    assert time.time() - start < 3
+
+
+def test_cancel_before_start_makes_no_model_calls(monkeypatch):
+    import threading
+    monkeypatch.setattr(engine, "fetch_all_data", lambda domains, tickers: {})
+
+    def must_not_call(*a, **kw):
+        raise AssertionError("model called after cancel")
+    monkeypatch.setattr(engine, "generate", must_not_call)
+    cancel = threading.Event()
+    cancel.set()
+    result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", cancel_event=cancel)
+    assert result["cancelled"] is True and result["guardrail_triggered"] == "Cancelled"

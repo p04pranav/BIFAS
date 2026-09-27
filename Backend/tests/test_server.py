@@ -26,7 +26,7 @@ def client():
     return TestClient(server.app)
 
 
-def fake_pipeline(query, depth, on_event=None):
+def fake_pipeline(query, depth, on_event=None, **kwargs):
     on_event("phase", {"name": "data"})
     on_event("data", {"domains": ["stocks"], "tickers": {"stocks": ["NVDA"]}})
     on_event("tasks", {"agents": [{"name": "NVDA_Tech", "task": "t", "domain": "stocks"}]})
@@ -79,7 +79,7 @@ def test_analyze_streams_events_in_order(client, monkeypatch):
 
 
 def test_analyze_reports_pipeline_errors(client, monkeypatch):
-    def broken(query, depth, on_event=None):
+    def broken(query, depth, on_event=None, **kwargs):
         raise RuntimeError("model down")
     monkeypatch.setattr(server, "run_bifas_pipeline", broken)
     events = parse_sse(client.get("/api/analyze", params={"query": "NVDA", "depth": "Quick"}).text)
@@ -125,3 +125,36 @@ def test_preview_separates_defaults_from_named_assets(client):
 def test_preview_empty_query(client):
     body = client.get("/api/preview", params={"query": "  "}).json()
     assert body["domains"] == [] and body["estimates"]["Deep"] == 15
+
+
+def test_client_disconnect_cancels_the_run(client, monkeypatch):
+    import threading
+    import time
+    from starlette.requests import Request
+    started, seen_cancel = threading.Event(), threading.Event()
+
+    def slow_pipeline(query, depth, on_event=None, cancel_event=None, **kwargs):
+        on_event("phase", {"name": "data"})
+        started.set()
+        if cancel_event.wait(timeout=10):
+            seen_cancel.set()
+            return {"cancelled": True}
+        return {"cancelled": False}
+
+    async def gone(self):
+        # Simulate the browser leaving once the run has started (TestClient can't hang up mid-stream).
+        return started.is_set()
+    monkeypatch.setattr(server, "run_bifas_pipeline", slow_pipeline)
+    monkeypatch.setattr(Request, "is_disconnected", gone)
+
+    res = client.get("/api/analyze", params={"query": "NVDA", "depth": "Quick"})
+    assert res.status_code == 200
+    assert seen_cancel.wait(5), "pipeline was not told to cancel after the client left"
+    assert "event: done" not in res.text  # cancelled runs never report done
+    for _ in range(50):  # the run slot is released once the cancelled pipeline returns
+        if server._run_slots.acquire(blocking=False):
+            server._run_slots.release()
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("run slot was not released")

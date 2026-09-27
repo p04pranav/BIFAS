@@ -5,13 +5,16 @@ static Frontend/ folder, so one process runs the whole app:
 
     cd Backend && uvicorn server:app --port 5050
 """
+import asyncio
 import json
+import logging
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +27,7 @@ from llm import usage_snapshot
 MAX_QUERY_CHARS = 2000
 MAX_CONCURRENT_RUNS = int(os.getenv("BIFAS_MAX_CONCURRENT_RUNS", "2"))
 KEEPALIVE_SECONDS = 15
+STREAM_POLL_SECONDS = 0.1
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "Frontend"
 
 EXAMPLE_QUERIES = [
@@ -32,6 +36,8 @@ EXAMPLE_QUERIES = [
     "EUR/USD, GBP/USD, USD/JPY forex correlations and macro factors",
     "Gold and crude oil price analysis with dollar correlation",
 ]
+
+log = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="BIFAS API", version="7.0")
 app.add_middleware(
@@ -91,13 +97,15 @@ def _sse(event_type, data):
 
 @app.get("/api/analyze")
 def analyze(
+    request: Request,
     query: str = Query(..., max_length=MAX_QUERY_CHARS),
     depth: str = Query("Standard"),
 ):
     """Run the pipeline and stream its progress as Server-Sent Events.
 
-    Events: phase, data, tasks, agent, report, audit, then done (full result
-    and updated usage) or error.
+    Events: phase, data, market, tasks, agent, report, audit, then done (full
+    result and updated usage) or error. If the client disconnects, the run is
+    cancelled before its next model call so no quota is wasted.
     """
     query = query.strip()
     if not query:
@@ -108,11 +116,15 @@ def analyze(
         raise HTTPException(429, "Too many analyses are running. Try again in a minute.")
 
     events = queue.Queue()
+    cancel = threading.Event()
 
     def worker():
         try:
-            result = run_bifas_pipeline(query, depth, on_event=lambda t, d: events.put((t, d)))
-            events.put(("done", {"result": _public_result(result), "usage": usage_snapshot()}))
+            result = run_bifas_pipeline(query, depth, on_event=lambda t, d: events.put((t, d)), cancel_event=cancel)
+            if result.get("cancelled"):
+                log.info("Analysis cancelled after the client disconnected: %r", query[:80])
+            else:
+                events.put(("done", {"result": _public_result(result), "usage": usage_snapshot()}))
         except Exception as e:
             events.put(("error", {"message": f"Analysis failed: {e}"}))
         finally:
@@ -122,16 +134,27 @@ def analyze(
 
     threading.Thread(target=worker, daemon=True).start()
 
-    def stream():
-        while True:
-            try:
-                item = events.get(timeout=KEEPALIVE_SECONDS)
-            except queue.Empty:
-                yield ": keep-alive\n\n"
-                continue
-            if item is None:
-                return
-            yield _sse(*item)
+    async def stream():
+        last_sent = time.monotonic()
+        try:
+            while True:
+                try:
+                    item = events.get_nowait()
+                except queue.Empty:
+                    if await request.is_disconnected():
+                        return
+                    if time.monotonic() - last_sent > KEEPALIVE_SECONDS:
+                        last_sent = time.monotonic()
+                        yield ": keep-alive\n\n"
+                    await asyncio.sleep(STREAM_POLL_SECONDS)
+                    continue
+                if item is None:
+                    return
+                last_sent = time.monotonic()
+                yield _sse(*item)
+        finally:
+            # Runs on normal completion and when the client goes away; a finished run ignores it.
+            cancel.set()
 
     return StreamingResponse(
         stream(),
