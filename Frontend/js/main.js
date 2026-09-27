@@ -2,7 +2,8 @@
 import { $, h, ICONS, escapeHtml, prettyModel, humanize, prefersReducedMotion } from "./util.js";
 import * as api from "./api.js";
 import { createBriefing } from "./views/briefing.js";
-import { createAgentsPanel, renderAgentNotes } from "./views/agents.js";
+import { createAgentsPanel } from "./views/agents.js";
+import { createDrawer } from "./views/drawer.js";
 import { createSessionsRail } from "./views/sessions.js";
 import { createSnapshotPanel } from "./views/snapshot.js";
 import { createPreview } from "./views/preview.js";
@@ -44,8 +45,10 @@ const state = {
 
 // ---------- side column ----------
 
+const drawer = createDrawer();
+
 const agentsPanel = createAgentsPanel(el.agents, el.agentsCount, {
-  onOpen: (agent) => toggleInlineNotes(agent),
+  onOpen: (agent, list) => drawer.open(agent, list, { onClosed: (shown) => shown && agentsPanel.focusRow(shown.name) }),
   onCount: (done, total) => {
     el.agentsEmpty.hidden = total > 0;
     if (state.run && state.focused === state.run.view) state.run.view.setAgentCount(done, total);
@@ -63,20 +66,6 @@ const preview = createPreview({
   depth: selectedDepth(),
   usage: state.usage,
 }));
-
-function toggleInlineNotes(agent) {
-  const li = [...el.agents.children].find((node) => node.querySelector(".agent-name")?.textContent === humanize(agent.name));
-  if (!li) return;
-  const open = li.querySelector(".agent-body");
-  const button = li.querySelector(".agent-toggle");
-  if (open) {
-    open.remove();
-    button.setAttribute("aria-expanded", "false");
-  } else {
-    li.append(renderAgentNotes(agent));
-    button.setAttribute("aria-expanded", "true");
-  }
-}
 
 function showDetails(view) {
   if (state.focused) state.focused.setFocused(false);

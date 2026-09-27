@@ -509,7 +509,6 @@ kbd {
 .agent-state { font-size: 0.78rem; color: var(--muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 0.2rem; }
 .agent-state .icon { width: 14px; height: 14px; }
 .agent-task { color: var(--muted); font-size: 0.82rem; padding: 0 0.2rem 0.7rem 2rem; margin-top: -0.3rem; line-height: 1.5; }
-.agent-body { margin: 0 0.2rem 0.9rem 2rem; padding: 0.8rem 0.9rem; background: var(--ink); border: 1px solid var(--rule); border-radius: var(--radius); font-size: 0.88rem; }
 .status-icon { width: 20px; height: 20px; display: grid; place-items: center; }
 .status-icon .icon { width: 19px; height: 19px; stroke-width: 2; }
 .agent[data-status="running"] .status-icon { color: var(--amber); }
@@ -626,6 +625,32 @@ kbd {
 .prose h2:focus, .prose h3:focus { outline: none; }
 .prose .lead { font-size: 1.08rem; line-height: 1.7; padding: 0.2rem 0 0.2rem 1rem; border-left: 3px solid var(--amber); }
 .prose .lead > * + * { margin-top: 0.7em; }
+
+/* ---------- Analyst drawer ---------- */
+
+.drawer { position: fixed; inset: 0; z-index: 40; }
+.drawer-backdrop { position: absolute; inset: 0; background: rgba(6, 10, 16, 0.6); animation: fade 200ms var(--ease); }
+.drawer-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(520px, 92vw);
+  display: flex; flex-direction: column; background: var(--panel);
+  border-left: 1px solid var(--rule-strong); box-shadow: -24px 0 48px rgba(0, 0, 0, 0.35);
+  animation: slide-in 220ms var(--ease);
+}
+.drawer-panel:focus { outline: none; }
+.drawer-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding: 1.1rem 1.25rem 0.9rem; border-bottom: 1px solid var(--rule); }
+.drawer-title { font-family: var(--font-display); font-weight: 600; font-size: 1.3rem; }
+.drawer-meta { color: var(--muted); font-size: 0.82rem; margin-top: 0.2rem; }
+.drawer-scroll { flex: 1; overflow-y: auto; padding: 1.1rem 1.25rem 1.5rem; }
+.drawer-task { color: var(--muted); font-size: 0.9rem; padding: 0.7rem 0.85rem; background: var(--ink); border-radius: var(--radius); margin-bottom: 1.1rem; }
+.drawer-body { font-size: 0.95rem; }
+.drawer-foot { display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.8rem 1.25rem; border-top: 1px solid var(--rule); }
+.drawer-nav { flex-direction: column; align-items: flex-start; gap: 0; min-height: 48px; max-width: 48%; padding: 0.35rem 0.8rem; white-space: normal; }
+.drawer-nav:last-child { align-items: flex-end; text-align: right; margin-left: auto; }
+.nav-dir { font-size: 0.72rem; color: var(--muted); }
+.nav-name { font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+body.drawer-open { overflow: hidden; }
+@keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---------- Footer ---------- */
 

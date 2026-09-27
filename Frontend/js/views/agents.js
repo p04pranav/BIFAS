@@ -1,5 +1,5 @@
 // Analysts panel in the right-hand column: one row per analyst with live status.
-import { h, ICONS, humanize, renderMarkdown } from "../util.js";
+import { h, ICONS, humanize } from "../util.js";
 
 const STATE_TEXT = { running: "Working", done: "Read", failed: "Failed", skipped: "Timed out", "not finished": "Not finished" };
 
@@ -22,7 +22,7 @@ export function createAgentsPanel(listEl, countEl, handlers = {}) {
     const name = h("span", { class: "agent-name" }, humanize(agent.name));
     const state = h("span", { class: "agent-state" });
     const icon = h("span", { class: "status-icon" });
-    const button = h("button", { type: "button", class: "agent-toggle", disabled: true }, icon, name, state);
+    const button = h("button", { type: "button", class: "agent-toggle", disabled: true, "aria-haspopup": "dialog" }, icon, name, state);
     const task = h("p", { class: "agent-task" }, agent.task || "");
     const li = h("li", { class: "agent" }, button, task);
     const entry = { agent: { ...agent }, li, button, icon, state, status: "running" };
@@ -81,9 +81,4 @@ export function createAgentsPanel(listEl, countEl, handlers = {}) {
       updateCount();
     },
   };
-}
-
-/** Inline fallback reader: expands the analyst's notes under its row. */
-export function renderAgentNotes(agent) {
-  return h("div", { class: "agent-body prose", html: renderMarkdown(agent.text || "") });
 }
