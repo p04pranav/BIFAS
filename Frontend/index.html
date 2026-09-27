@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0D1520">
+  <title>BIFAS Research Desk</title>
+  <meta name="description" content="Ask about stocks, crypto, forex or commodities and get an audited briefing from a desk of AI analysts working on live market data.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230D1520'/%3E%3Cpath d='M7 22l6-7 5 4 7-9' fill='none' stroke='%23F2A93B' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // To use a backend on another host, set it here or open the page with ?api=http://host:5050
+    window.BIFAS_API = window.BIFAS_API || "";
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#query">Skip to the question box</a>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a class="brand" href="./" aria-label="BIFAS home">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="7"/>
+          <path d="M7 22l6-7 5 4 7-9"/>
+        </svg>
+        <span class="brand-name">BIFAS</span>
+        <span class="brand-sub">Research desk</span>
+      </a>
+      <div class="status" aria-label="Model status">
+        <span class="model-pill" id="model-pill" data-kind="unknown">
+          <span class="model-dot" aria-hidden="true"></span>
+          <span id="model-name">Connecting…</span>
+        </span>
+        <div class="quota" id="quota" hidden>
+          <div class="quota-bar" role="progressbar" aria-label="Model requests used today" aria-valuemin="0" id="quota-bar">
+            <span class="quota-fill" id="quota-fill"></span>
+          </div>
+          <span class="quota-text" id="quota-text"></span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="ask" aria-labelledby="ask-title">
+      <h1 id="ask-title">What should the desk look into?</h1>
+      <p class="lede">Ask about stocks, crypto, forex or commodities. A team of AI analysts pulls live market data, works in parallel, and hands you an audited briefing.</p>
+
+      <form id="ask-form" class="ask-form" novalidate>
+        <label for="query" class="sr-only">Your question</label>
+        <textarea id="query" name="query" rows="3" maxlength="2000" required
+          placeholder="Is gold still a hedge against a weaker dollar?"></textarea>
+
+        <div class="examples" id="examples" role="group" aria-label="Example questions"></div>
+
+        <div class="controls">
+          <fieldset class="depth" id="depth">
+            <legend>Depth</legend>
+            <div class="depth-options" id="depth-options"></div>
+          </fieldset>
+          <div class="run-wrap">
+            <button type="submit" class="run" id="run">
+              <svg class="run-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 4.5v11l9-5.5z"/></svg>
+              <span id="run-label">Run analysis</span>
+            </button>
+            <p class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run</p>
+          </div>
+        </div>
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+      </form>
+    </section>
+
+    <div class="banners" id="banners" aria-live="polite"></div>
+
+    <section class="progress" id="progress" aria-label="Analysis progress" hidden>
+      <ol class="steps" id="steps">
+        <li class="step" data-step="data"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Market data</span></li>
+        <li class="step" data-step="decompose"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Plan tasks</span></li>
+        <li class="step" data-step="agents"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Analysts <span class="step-count" id="agent-count"></span></span></li>
+        <li class="step" data-step="synthesis"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Write report</span></li>
+        <li class="step" data-step="audit"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Audit</span></li>
+      </ol>
+      <span class="timer" id="timer" aria-label="Elapsed time">0:00</span>
+      <p class="sr-only" id="live" aria-live="polite"></p>
+    </section>
+
+    <section class="intro" id="intro" aria-labelledby="intro-title">
+      <h2 id="intro-title" class="sr-only">How it works</h2>
+      <dl class="intro-grid">
+        <div>
+          <dt>Live numbers, not guesses</dt>
+          <dd>Prices, technicals, on-chain metrics and sentiment come from six public market data sources before any analyst writes a word.</dd>
+        </div>
+        <div>
+          <dt>Analysts work in parallel</dt>
+          <dd>Your question is split into focused tasks, and each analyst sees only the data for the assets it covers.</dd>
+        </div>
+        <div>
+          <dt>Audited before you read it</dt>
+          <dd>An auditor checks the finished briefing against your question and marks it approved or rejected.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="workspace" id="workspace" hidden>
+      <aside class="desk" aria-labelledby="desk-title">
+        <h2 id="desk-title">Analysts</h2>
+        <ul class="agent-list" id="agents"></ul>
+      </aside>
+
+      <article class="memo" aria-labelledby="memo-title">
+        <header class="memo-head">
+          <div class="memo-titles">
+            <h2 id="memo-title">Briefing</h2>
+            <p class="memo-query" id="memo-query"></p>
+          </div>
+          <div class="stamp" id="stamp" hidden>
+            <span class="stamp-label" id="stamp-label"></span>
+          </div>
+        </header>
+        <p class="stamp-reason" id="stamp-reason" hidden></p>
+
+        <div class="assets" id="assets" aria-label="Assets analyzed"></div>
+
+        <dl class="metrics" id="metrics" hidden>
+          <div><dt>Time</dt><dd id="m-time"></dd></div>
+          <div><dt>Analysts</dt><dd id="m-agents"></dd></div>
+          <div><dt>Model</dt><dd id="m-model"></dd></div>
+        </dl>
+
+        <div class="memo-body" id="report" aria-busy="true"></div>
+
+        <footer class="memo-actions" id="memo-actions" hidden>
+          <button type="button" class="ghost" id="copy">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="7" width="9" height="10" rx="1.5"/><path d="M4 13V4.5A1.5 1.5 0 0 1 5.5 3H12"/></svg>
+            <span>Copy report</span>
+          </button>
+          <button type="button" class="ghost" id="download">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m-4-4 4 4 4-4M4 16h12"/></svg>
+            <span>Download .md</span>
+          </button>
+        </footer>
+      </article>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <p>BIFAS briefings are generated by AI from public market data and are not investment advice.</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
