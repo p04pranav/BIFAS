@@ -1,8 +1,9 @@
-// BIFAS Research Desk: app state, run lifecycle and wiring.
+// BIFAS Research Desk: app state, sessions, run lifecycle and wiring.
 import { $, h, ICONS, escapeHtml, prettyModel, humanize, prefersReducedMotion } from "./util.js";
 import * as api from "./api.js";
 import { createBriefing } from "./views/briefing.js";
 import { createAgentsPanel, renderAgentNotes } from "./views/agents.js";
+import { createSessionsRail } from "./views/sessions.js";
 
 const FALLBACK_DEPTHS = {
   Quick: { max_agents: 3, description: "Fast analysis, 3 agents, ~25s" },
@@ -23,12 +24,15 @@ const el = {
   threadSlot: $("thread-slot"), composerLabel: $("composer-label"), live: $("live"),
   modelPill: $("model-pill"), modelName: $("model-name"), quota: $("quota"), quotaBar: $("quota-bar"),
   quotaFill: $("quota-fill"), quotaText: $("quota-text"), agents: $("agents"), agentsCount: $("agents-count"),
-  agentsEmpty: $("agents-empty"),
+  agentsEmpty: $("agents-empty"), sessionList: $("session-list"), newSession: $("new-session"),
+  mastheadTitle: $("masthead-title"),
 };
 
 const state = {
   depths: FALLBACK_DEPTHS,
   usage: null,
+  sessions: [],       // summaries for the rail
+  session: null,      // the open session ({id, title, briefings}) or null for a new one
   views: [],          // briefing views in the thread, oldest first
   focused: null,      // the briefing whose details show in the side column
   run: null,          // { view, controller, agents: [] } while a run is in progress
@@ -66,8 +70,9 @@ function showDetails(view) {
     return;
   }
   view.setFocused(true);
-  if (state.run && view === state.run.view) agentsPanel.set(state.run.agents, { live: false });
+  if (state.run && view === state.run.view) agentsPanel.set(state.run.agents);
   else agentsPanel.set(view.data.agents || []);
+  if (view.data.id && state.session) setHash(state.session.id, view.data.id);
 }
 
 // ---------- header status ----------
@@ -88,6 +93,133 @@ function renderUsage(usage) {
   el.quotaBar.setAttribute("aria-valuenow", String(used));
   el.quotaFill.style.width = limit ? `${Math.min(100, (used / limit) * 100)}%` : "0%";
   el.quotaText.textContent = `${used} of ${limit} requests today`;
+}
+
+/** Session name in the masthead; click (or Enter) to rename in place. */
+function renderMastheadTitle() {
+  const session = state.session;
+  if (!session) {
+    el.mastheadTitle.replaceChildren(h("span", { class: "masthead-session is-new" }, "New session"));
+    return;
+  }
+  const button = h("button", { type: "button", class: "masthead-session", title: "Rename session" },
+    h("span", { class: "masthead-session-name" }, session.title), h("span", { html: ICONS.pencil }));
+  button.addEventListener("click", () => {
+    const input = h("input", { class: "masthead-rename", value: session.title, maxlength: "80", "aria-label": "Session name" });
+    el.mastheadTitle.replaceChildren(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const title = input.value.trim();
+      if (save && title && title !== session.title) {
+        try {
+          await renameSession(session.id, title);
+        } catch (err) {
+          banner("error", escapeHtml(err.message));
+        }
+      }
+      renderMastheadTitle();
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => finish(true));
+  });
+  el.mastheadTitle.replaceChildren(button);
+}
+
+// ---------- sessions ----------
+
+const rail = createSessionsRail(el.sessionList, {
+  onSelect: (id) => { if (!state.session || state.session.id !== id) openSession(id); },
+  onNew: () => newSession(),
+  onRename: (id, title) => renameSession(id, title),
+  onDelete: async (id) => {
+    try {
+      await api.deleteSession(id);
+    } catch (err) {
+      if (err.status !== 404) {
+        banner("error", escapeHtml(err.message));
+        throw err;
+      }
+    }
+    if (state.session && state.session.id === id) newSession();
+    await refreshSessions();
+    announce("Session deleted.");
+  },
+});
+
+async function refreshSessions() {
+  try {
+    state.sessions = (await api.listSessions()).sessions || [];
+  } catch (err) {
+    state.sessions = [];
+  }
+  rail.render(state.sessions, state.session?.id || null);
+}
+
+async function renameSession(id, title) {
+  const summary = await api.renameSession(id, title);
+  if (state.session && state.session.id === id) state.session.title = summary.title;
+  renderMastheadTitle();
+  await refreshSessions();
+}
+
+function setHash(sessionId, briefingId) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set("s", sessionId);
+  if (briefingId) params.set("b", briefingId);
+  const hash = params.toString() ? `#${params}` : "";
+  if (location.hash !== hash) history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+}
+
+function clearThread() {
+  state.views = [];
+  state.focused = null;
+  el.thread.replaceChildren();
+  el.banners.replaceChildren();
+  agentsPanel.clear();
+}
+
+function newSession() {
+  if (state.run) return;
+  state.session = null;
+  clearThread();
+  setLayout();
+  setHash(null, null);
+  renderMastheadTitle();
+  rail.render(state.sessions, null);
+  el.query.focus();
+}
+
+/** Open a saved session from Memory/; no model calls are made. */
+async function openSession(id, briefingId) {
+  if (state.run) return;
+  let session;
+  try {
+    session = await api.getSession(id);
+  } catch (err) {
+    banner("error", err.status === 404 ? "That session no longer exists. It may have been deleted." : escapeHtml(err.message));
+    newSession();
+    return;
+  }
+  state.session = session;
+  clearThread();
+  for (const briefing of session.briefings) addBriefingView(briefing);
+  const target = state.views.find((v) => v.data.id === briefingId) || state.views[state.views.length - 1];
+  if (target) {
+    state.views.forEach((v) => v.setExpanded(v === target));
+    showDetails(target);
+    target.el.scrollIntoView({ block: "start" });
+  }
+  setLayout();
+  setHash(session.id, target?.data.id);
+  renderMastheadTitle();
+  rail.render(state.sessions, session.id);
 }
 
 // ---------- composer ----------
@@ -133,6 +265,8 @@ function setRunning(running) {
   el.runIcon.innerHTML = running ? ICONS.stop : ICONS.play;
   el.runLabel.textContent = running ? "Cancel" : "Run analysis";
   el.run.setAttribute("aria-label", running ? "Cancel the running analysis" : "Run analysis");
+  el.newSession.disabled = running;
+  rail.setLocked(running);
 }
 
 // ---------- banners ----------
@@ -153,7 +287,7 @@ function serverHelp() {
 
 function announce(message) { el.live.textContent = message; }
 
-// ---------- running an analysis ----------
+// ---------- briefings ----------
 
 function addBriefingView(data) {
   const view = createBriefing(data, { onFocus: (v) => { if (state.focused !== v) showDetails(v); } });
@@ -161,9 +295,56 @@ function addBriefingView(data) {
   el.thread.append(view.el);
   // Only the newest briefing stays open; older ones collapse to a one-line header.
   state.views.slice(0, -1).forEach((v) => v.setExpanded(false));
+  addBriefingTools(view);
   setLayout();
   return view;
 }
+
+function addBriefingTools(view) {
+  const del = h("button", { type: "button", class: "icon-btn", "aria-label": "Delete this briefing", title: "Delete briefing", html: ICONS.trash });
+  view.toolsEl.replaceChildren(del);
+  view.setToolsVisible(!!view.data.id);
+  del.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const keep = h("button", { type: "button", class: "ghost small" }, "Keep");
+    const confirm = h("button", { type: "button", class: "danger small" }, "Delete");
+    view.toolsEl.replaceChildren(h("span", { class: "tools-confirm" }, "Delete this briefing?"), confirm, keep);
+    confirm.focus();
+    keep.addEventListener("click", (ev) => { ev.stopPropagation(); addBriefingTools(view); });
+    confirm.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      try {
+        await api.deleteBriefing(state.session.id, view.data.id);
+      } catch (err) {
+        if (err.status !== 404) {
+          banner("error", escapeHtml(err.message));
+          addBriefingTools(view);
+          return;
+        }
+      }
+      removeBriefingView(view);
+      await refreshSessions();
+      announce("Briefing deleted.");
+    });
+  });
+}
+
+function removeBriefingView(view) {
+  view.el.remove();
+  state.views = state.views.filter((v) => v !== view);
+  if (state.session) state.session.briefings = state.session.briefings.filter((b) => b.id !== view.data.id);
+  const next = state.views[state.views.length - 1];
+  if (next) {
+    next.setExpanded(true);
+    showDetails(next);
+  } else {
+    showDetails(null);
+    setHash(state.session?.id, null);
+  }
+  setLayout();
+}
+
+// ---------- running an analysis ----------
 
 async function runAnalysis(query, depth) {
   el.banners.replaceChildren();
@@ -176,24 +357,40 @@ async function runAnalysis(query, depth) {
   view.activateStep("data");
   view.el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
 
-  const finish = (result, usage) => {
+  const finish = (payload) => {
+    const result = payload.result || {};
     run.finished = true;
-    view.data = { ...view.data, ...result, live: false };
+    view.live = false;
     view.stopTimer(result.execution_time);
     if (!view.data.final_report && result.final_report) view.setReport(result.final_report);
-    if (result.audit_status) view.setStamp(result.audit_status, { animate: true });
+    if (result.audit_status && !view.data.audit_status) view.setStamp(result.audit_status, { animate: true });
     view.finishSteps(false);
     const total = (result.agent_squad || []).length;
     const done = (result.rounds || []).length;
     view.setMetrics({ execution_time: result.execution_time, done, total, models: result.models_used });
     if (done < total) view.setStep("agents", done ? "done" : "failed");
-    agentsPanel.stopRunning();
-    view.data.agents = agentsPanel.agents();
+    if (state.focused === view) agentsPanel.stopRunning();
+    run.agents.forEach((a) => { if (a.status === "running") a.status = "not finished"; });
+    Object.assign(view.data, {
+      id: payload.briefing_id, created_at: new Date().toISOString(), agents: run.agents,
+      final_report: view.data.final_report || result.final_report, audit_status: result.audit_status,
+      execution_time: result.execution_time, models_used: result.models_used, used_context: result.used_context,
+      domains: result.domains, tickers: result.tickers, market_snapshot: result.market_snapshot,
+    });
+    view.setMeta();
+    view.setToolsVisible(true);
+    if (state.session && payload.session) {
+      state.session.title = payload.session.title;
+      state.session.briefings.push(view.data);
+    }
+    if (state.focused === view) setHash(payload.session_id, payload.briefing_id);
+    renderMastheadTitle();
+    refreshSessions();
     if (result.guardrail_triggered) banner("warn", escapeHtml(result.guardrail_triggered));
     if (result.fallback_used) {
       banner("warn", `Today's primary model quota is used up, so this briefing was written by ${escapeHtml((result.models_used || []).map(prettyModel).join(", "))}.`);
     }
-    renderUsage(usage);
+    renderUsage(payload.usage);
     announce(`Analysis complete in ${Math.round(result.execution_time || 0)} seconds.`);
   };
 
@@ -202,19 +399,33 @@ async function runAnalysis(query, depth) {
     run.finished = true;
     view.stopTimer();
     view.finishSteps(true);
-    agentsPanel.stopRunning();
+    if (state.focused === view) agentsPanel.stopRunning();
     if (!view.data.final_report) view.setReport("");
-    banner("error", message, retry ? { label: "Try again", run: () => startRun(query, depth) } : null);
+    banner("error", message, retry ? {
+      label: "Try again",
+      run: () => {
+        removeBriefingView(view);
+        startRun(query, depth);
+      },
+    } : null);
     announce("Analysis stopped.");
   };
 
   const onEvent = (type, data) => {
     switch (type) {
+      case "session":
+        if (!state.session || state.session.id !== data.id) {
+          state.session = { id: data.id, title: data.title, briefings: [] };
+          renderMastheadTitle();
+          setHash(data.id, null);
+          refreshSessions();
+        }
+        break;
       case "phase": view.activateStep(data.name); break;
       case "data": view.setAssets(data.domains, data.tickers); break;
       case "tasks":
         run.agents = (data.agents || []).map((a) => ({ ...a, status: "running" }));
-        if (state.focused === view) agentsPanel.set(run.agents, { live: true });
+        if (state.focused === view) agentsPanel.set(run.agents);
         view.setAgentCount(0, run.agents.length);
         break;
       case "agent": {
@@ -227,26 +438,30 @@ async function runAnalysis(query, depth) {
       }
       case "report": view.setReport(data.markdown); break;
       case "audit": view.setStamp(data.status, { animate: true }); break;
-      case "done": finish(data.result || {}, data.usage); break;
+      case "done": finish(data); break;
       case "error": fail(escapeHtml(data.message || "The analysis failed.")); break;
       default: break;
     }
   };
 
   try {
-    await api.streamAnalyze({ query, depth }, onEvent, run.controller.signal);
+    await api.streamAnalyze({ query, depth, session: state.session?.id }, onEvent, run.controller.signal);
     if (!run.finished) fail("The server closed the connection before the analysis finished.");
   } catch (err) {
     if (err.name === "AbortError") {
-      fail("Analysis cancelled. Nothing was saved, and no more requests were used.", { retry: true });
+      fail("Analysis cancelled. Nothing was saved, and no more requests were used.");
     } else if (err.status === 0) {
       fail(`Can't reach the BIFAS server. ${serverHelp()}`);
+    } else if (err.status === 404) {
+      fail("This session no longer exists. Start a new session and try again.", { retry: false });
     } else {
       fail(escapeHtml(err.message));
     }
   } finally {
     if (state.run === run) state.run = null;
     setRunning(false);
+    // A cancelled or failed first run leaves no saved session behind.
+    if (!run.view.data.id && state.session && !state.session.briefings.length) refreshSessions();
   }
 }
 
@@ -287,12 +502,24 @@ el.query.addEventListener("input", () => {
   el.query.classList.toggle("has-text", el.query.value.trim().length > 0);
 });
 
+el.newSession.addEventListener("click", () => newSession());
+
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable;
-  if (e.key === "/" && !typing) {
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "/") {
     e.preventDefault();
     el.query.focus();
+  } else if (e.key === "n" || e.key === "N") {
+    e.preventDefault();
+    newSession();
   }
+});
+
+window.addEventListener("hashchange", () => {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const sid = params.get("s");
+  if (sid && (!state.session || state.session.id !== sid)) openSession(sid, params.get("b"));
 });
 
 // ---------- start ----------
@@ -300,6 +527,7 @@ document.addEventListener("keydown", (e) => {
 async function init() {
   setRunning(false);
   setLayout();
+  renderMastheadTitle();
   try {
     const meta = await api.getMeta();
     renderDepths(meta.depths || FALLBACK_DEPTHS);
@@ -311,7 +539,12 @@ async function init() {
     el.modelPill.dataset.kind = "offline";
     el.modelName.textContent = "Server offline";
     banner("error", `Can't reach the BIFAS server${api.API ? ` at <code>${escapeHtml(api.API)}</code>` : ""}. ${serverHelp()}`);
+    rail.render([], null);
+    return;
   }
+  await refreshSessions();
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (params.get("s")) await openSession(params.get("s"), params.get("b"));
 }
 
 init();

@@ -41,7 +41,15 @@
     </div>
   </header>
 
-  <div class="shell">
+  <div class="shell has-rail">
+    <nav class="rail" id="rail" aria-label="Sessions">
+      <button type="button" class="new-session" id="new-session" title="New session (N)">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+        <span>New session</span>
+      </button>
+      <ul class="session-list" id="session-list" aria-label="Your sessions"></ul>
+    </nav>
+
     <main class="stage" id="stage">
       <section class="start" id="start" aria-labelledby="start-title">
         <h1 id="start-title">What should the desk look into?</h1>
