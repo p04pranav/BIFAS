@@ -4,3 +4,4 @@ __pycache__/
 test_runner.py
 .bifas_usage.json
 .pytest_cache/
+.claude/
