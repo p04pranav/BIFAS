@@ -1,5 +1,48 @@
 # BIFAS Test Report
 
+## v7.1 — Backend / Frontend split
+
+**Date:** September 27, 2026
+**Stack:** FastAPI + Server-Sent Events backend (`Backend/`), vanilla HTML/CSS/JS frontend (`Frontend/`)
+**Model:** `gemini-3.5-flash-lite` (fallback `gemma-4-26b-a4b-it`)
+**Environment:** Python 3.13, Linux, headless Chromium (Playwright)
+
+### Offline suite
+
+`cd Backend && pytest -q` → **60 passed** (about 6s, no API key or network needed). The 48 v7.0 tests are unchanged; 12 new tests cover:
+
+| Area | What is checked |
+|------|-----------------|
+| API | `/api/health`, `/api/meta` (depths, usage, examples) |
+| Validation | 422 for an empty query, an unknown depth, and a query over 2,000 characters |
+| Streaming | SSE events arrive in order (`phase`, `data`, `tasks`, `agent`, `report`, `audit`, `done`); bulky per-agent market data is stripped from the result |
+| Errors | A pipeline exception becomes a single `error` event |
+| Concurrency | 429 when all run slots are busy; slots are freed after every run |
+| Frontend | `Frontend/` is served at `/` |
+| Engine events | Phase order, timed-out agents reported as `skipped`, and a crashing listener doesn't break the run |
+
+### Live API run
+
+`curl -N "/api/analyze?query=Gold and crude oil price analysis with dollar correlation&depth=Quick"` streamed data, tasks, three agent results, the report and the audit, then `done`, in **22.3s**. The verdict was APPROVED. A bad depth and an empty query both returned 422.
+
+### Live browser runs
+
+Same query, Quick depth, driven through the dashboard at `http://localhost:5050/`:
+
+| Run | Viewport | Time | Analysts | Steps | Verdict |
+|-----|----------|------|----------|-------|---------|
+| 1 | 1440×900 | 22.8s | 3/3 done | all 5 done | ✅ Approved |
+| 2 | 1440×900 | 23.3s | 3/3 done | all 5 done | ✅ Approved |
+
+- Dollar amounts render correctly in the report (e.g. `$4,321.20`, `$92.41`, `$4,354.55`). The Streamlit UI had mangled these as LaTeX.
+- There were no console errors or page errors, and no horizontal scroll at 1440px (desktop) or 1280px (laptop).
+- The idle page shows no empty panels. After a run starts, the intro collapses and the page scrolls to the progress timeline.
+- The model pill and quota meter showed Gemini 3.5 Flash Lite and the running request count.
+
+The layout targets desktop and laptop screens; phone layouts were intentionally not built or tested.
+
+---
+
 ## v7.0 — Gemini 3.5 Flash Lite
 
 **Date:** September 27, 2026
@@ -8,7 +51,7 @@
 
 ### Offline suite
 
-`pytest -q` → **48 passed** (about 4s, no API key or network needed). Covers domain and ticker detection, indicator column mapping, per-agent data routing, LLM thought and truncation handling, 429 fallback, daily-cap fallback, 5xx retry, rate limiting, auditor verdicts, and the hard timeout with a stuck agent.
+`pytest -q` → **48 passed** at v7.0 (about 4s, no API key or network needed; 60 as of v7.1). Covers domain and ticker detection, indicator column mapping, per-agent data routing, LLM thought and truncation handling, 429 fallback, daily-cap fallback, 5xx retry, rate limiting, auditor verdicts, and the hard timeout with a stuck agent.
 
 ### Live runs
 
