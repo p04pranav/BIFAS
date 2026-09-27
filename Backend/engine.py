@@ -13,7 +13,7 @@ from bifas_agents import (
 )
 from data_fetcher import (
     detect_domains, extract_tickers, fetch_all_data,
-    get_ticker_data_for_agent
+    get_ticker_data_for_agent, market_snapshot
 )
 
 # Sprint Architecture Constants
@@ -197,7 +197,7 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
     Hard 5-minute timeout. Agent count controls depth.
 
     on_event(type, data) is called as the run progresses:
-    phase(name) when a phase starts, data(domains, tickers), tasks(agents),
+    phase(name) when a phase starts, data(domains, tickers), market(assets), tasks(agents),
     agent(name, status, text, model), report(markdown), audit(status).
     """
     emit = _event_emitter(on_event)
@@ -215,6 +215,7 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
         "execution_time": 0,
         "models_used": [],
         "fallback_used": False,
+        "market_snapshot": [],
     }
     models = set()
     guardrails = []
@@ -228,6 +229,8 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
         market_data = fetch_all_data(domains, tickers_map)
         result["data_sources"] = list(tickers_map.keys())
         emit("data", domains=domains, tickers=tickers_map)
+        result["market_snapshot"] = market_snapshot(market_data, domains, tickers_map)
+        emit("market", assets=result["market_snapshot"])
 
         # PHASE 1: Task Decomposition (1 call)
         emit("phase", name="decompose")

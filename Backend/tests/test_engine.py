@@ -95,7 +95,7 @@ def test_progress_events_in_order(offline_pipeline):
     events = []
     engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=lambda t, d: events.append((t, d)))
     types = [t for t, _ in events]
-    assert types[:5] == ["phase", "data", "phase", "tasks", "phase"]
+    assert types[:6] == ["phase", "data", "market", "phase", "tasks", "phase"]
     assert [d["name"] for t, d in events if t == "phase"] == ["data", "decompose", "agents", "synthesis", "audit"]
     assert sorted(d["name"] for t, d in events if t == "agent") == ["Macro", "NVDA_Tech"]
     assert all(d["status"] == "done" and d["text"] for t, d in events if t == "agent")
@@ -120,3 +120,14 @@ def test_failing_listener_does_not_break_run(offline_pipeline):
         raise RuntimeError("UI crashed")
     result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=listener)
     assert result["audit_status"].startswith("STATUS: APPROVED")
+
+
+def test_market_snapshot_in_result_and_event(offline_pipeline, monkeypatch):
+    offline_pipeline(agent_names=["A"])
+    fake_snapshot = [{"symbol": "NVDA", "name": "NVIDIA", "domain": "stocks", "price": 1.0,
+                      "change_pct": 0.5, "rsi": 50.0, "closes": [["2026-09-25", 1.0]]}]
+    monkeypatch.setattr(engine, "market_snapshot", lambda md, domains, tickers=None: fake_snapshot)
+    events = []
+    result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", on_event=lambda t, d: events.append((t, d)))
+    assert result["market_snapshot"] == fake_snapshot
+    assert ("market", {"assets": fake_snapshot}) in events

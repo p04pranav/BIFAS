@@ -219,6 +219,7 @@ def fetch_stock_data(ticker):
             "sma_50": info.get("fiftyDayAverage"),
             "sma_200": info.get("twoHundredDayAverage"),
             "avg_volume": info.get("averageVolume"),
+            "name": info.get("shortName") or info.get("longName"),
             "sector": info.get("sector"),
             "industry": info.get("industry"),
             "hist": hist,
@@ -721,6 +722,8 @@ def _fetch_crypto_bundle(coin_ids):
     for cid in coin_ids:
         mvrv_data[cid] = fetch_crypto_mvrv(cid)
     contexts = {}
+    ohlcv_by_coin = {}
+    technicals_by_coin = {}
     for cid in coin_ids:
         kraken_pair = KRAKEN_PAIR_MAP.get(cid)
         technicals = {}
@@ -728,11 +731,14 @@ def _fetch_crypto_bundle(coin_ids):
             ohlcv = fetch_crypto_ohlcv(kraken_pair, 30)
             if ohlcv is not None:
                 technicals = compute_technicals(ohlcv)
+                ohlcv_by_coin[cid] = ohlcv
+        technicals_by_coin[cid] = technicals
         coin_market = market.get(cid, {})
         coin_onchain = onchain if cid == "bitcoin" else {}
         coin_mvrv = mvrv_data.get(cid, {})
         contexts[cid] = format_crypto_context(cid, coin_market, technicals, coin_onchain, sentiment, coin_mvrv)
-    return {"market": market, "onchain": onchain, "sentiment": sentiment, "mvrv": mvrv_data, "contexts": contexts}
+    return {"market": market, "onchain": onchain, "sentiment": sentiment, "mvrv": mvrv_data,
+            "ohlcv": ohlcv_by_coin, "technicals": technicals_by_coin, "contexts": contexts}
 
 
 def _fetch_commodity_bundle(symbols):
@@ -753,6 +759,95 @@ def _fetch_forex_bundle(pairs):
         df = ohlcv.get(pair_sym)
         contexts[pair_sym] = format_forex_context(pair_sym, df, rates, commodities)
     return {"ohlcv": ohlcv, "rates": rates, "commodities": commodities, "contexts": contexts}
+
+
+FOREX_NAMES = {
+    "EURUSD=X": "EUR/USD", "GBPUSD=X": "GBP/USD", "JPY=X": "USD/JPY", "CHF=X": "USD/CHF",
+    "AUDUSD=X": "AUD/USD", "NZDUSD=X": "NZD/USD", "CAD=X": "USD/CAD",
+}
+SNAPSHOT_POINTS = 30
+
+
+def _finite(value, digits=6):
+    """Round a number for JSON, or None if missing/NaN/inf."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(v, digits) if np.isfinite(v) else None
+
+
+def _close_series(hist):
+    if hist is None or getattr(hist, "empty", True) or "Close" not in hist:
+        return None
+    closes = hist["Close"].dropna()
+    return closes if len(closes) else None
+
+
+def _snapshot_entry(symbol, name, domain, hist, price=None, change_pct=None, rsi=None):
+    closes = _close_series(hist)
+    if price is None and closes is not None:
+        price = closes.iloc[-1]
+    if change_pct is None and closes is not None and len(closes) >= 2 and closes.iloc[-2]:
+        change_pct = (closes.iloc[-1] - closes.iloc[-2]) / closes.iloc[-2] * 100
+    if rsi is None and hist is not None:
+        rsi = compute_technicals(hist).get("rsi")
+    points = []
+    if closes is not None:
+        for idx, value in closes.tail(SNAPSHOT_POINTS).items():
+            date = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
+            v = _finite(value)
+            if v is not None:
+                points.append([date, v])
+    return {
+        "symbol": symbol,
+        "name": name or symbol,
+        "domain": domain,
+        "price": _finite(price),
+        "change_pct": _finite(change_pct, 2),
+        "rsi": _finite(rsi, 1),
+        "closes": points,
+    }
+
+
+def market_snapshot(market_data, domains, tickers_map=None):
+    """Headline numbers and a short price history for every fetched asset, for display.
+
+    Stocks follow the order they were asked about (tickers_map), not fetch completion order."""
+    entries = []
+    for domain in domains:
+        if domain == "stocks":
+            stocks = market_data.get("stocks") or {}
+            order = [t for t in (tickers_map or {}).get("stocks", []) if t in stocks]
+            for ticker in order + [t for t in stocks if t not in order]:
+                bundle = stocks[ticker]
+                data = bundle.get("data", {})
+                if data.get("error"):
+                    continue
+                entries.append(_snapshot_entry(
+                    ticker, data.get("name") or ticker, "stocks", data.get("hist"),
+                    price=data.get("price"), rsi=(bundle.get("technicals") or {}).get("rsi"),
+                ))
+        elif domain == "crypto":
+            crypto = market_data.get("crypto") or {}
+            for cid, market in (crypto.get("market") or {}).items():
+                entries.append(_snapshot_entry(
+                    market.get("symbol") or cid, market.get("name") or cid, "crypto",
+                    (crypto.get("ohlcv") or {}).get(cid), price=market.get("price"),
+                    change_pct=market.get("change_24h"), rsi=(crypto.get("technicals") or {}).get(cid, {}).get("rsi"),
+                ))
+        elif domain == "forex":
+            for sym, df in ((market_data.get("forex") or {}).get("ohlcv") or {}).items():
+                if df is not None and not df.empty:
+                    entries.append(_snapshot_entry(sym, FOREX_NAMES.get(sym, sym.replace("=X", "")), "forex", df))
+        elif domain == "commodities":
+            for sym, data in ((market_data.get("commodities") or {}).get("data") or {}).items():
+                entries.append(_snapshot_entry(
+                    sym, data.get("name") or COMMODITY_NAMES.get(sym, sym), "commodities", data.get("hist"),
+                    price=data.get("price"),
+                ))
+    seen = set()
+    return [e for e in entries if not (e["symbol"] in seen or seen.add(e["symbol"]))]
 
 
 MAX_FALLBACK_CONTEXT_CHARS = 20000

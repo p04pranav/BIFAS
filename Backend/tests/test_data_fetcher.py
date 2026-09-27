@@ -92,3 +92,44 @@ def test_unmatched_agent_gets_all_detected_domains(market_data):
 
 def test_no_data_message(market_data):
     assert d.get_ticker_data_for_agent("X", {}, ["stocks"]).startswith("No specific market data")
+
+
+def _stock_bundle(ticker, hist):
+    last = float(hist["Close"].iloc[-1])
+    return {"data": {"ticker": ticker, "name": f"{ticker} Inc.", "price": last, "hist": hist},
+            "technicals": d.compute_technicals(hist), "context": f"CTX-{ticker}"}
+
+
+def test_market_snapshot_shapes_every_domain():
+    hist = _ohlcv(60)
+    market_data = {
+        "stocks": {"AAPL": _stock_bundle("AAPL", hist), "NVDA": _stock_bundle("NVDA", hist)},
+        "crypto": {"market": {"bitcoin": {"name": "Bitcoin", "symbol": "BTC", "price": 84700.0, "change_24h": 0.79}},
+                   "ohlcv": {"bitcoin": hist}, "technicals": {"bitcoin": {"rsi": 61.2}}},
+        "forex": {"ohlcv": {"EURUSD=X": hist}},
+        "commodities": {"data": {"GC=F": {"name": "Gold", "price": 4321.2, "hist": hist}}},
+    }
+    tickers = {"stocks": ["NVDA", "AAPL"]}
+    snap = d.market_snapshot(market_data, ["stocks", "crypto", "forex", "commodities"], tickers)
+    assert [e["symbol"] for e in snap] == ["NVDA", "AAPL", "BTC", "EURUSD=X", "GC=F"]
+    by = {e["symbol"]: e for e in snap}
+    assert by["BTC"]["price"] == 84700.0 and by["BTC"]["change_pct"] == 0.79 and by["BTC"]["rsi"] == 61.2
+    assert by["EURUSD=X"]["name"] == "EUR/USD" and by["GC=F"]["name"] == "Gold"
+    for e in snap:
+        assert set(e) == {"symbol", "name", "domain", "price", "change_pct", "rsi", "closes"}
+        assert len(e["closes"]) == d.SNAPSHOT_POINTS
+        assert e["closes"][-1][1] == pytest.approx(float(hist["Close"].iloc[-1]))
+        assert 0 <= e["rsi"] <= 100
+
+
+def test_market_snapshot_skips_errors_and_is_json_safe():
+    import json
+    nan_hist = _ohlcv(3)
+    nan_hist.loc[nan_hist.index[-1], "Close"] = float("nan")
+    market_data = {"stocks": {"BAD": {"data": {"ticker": "BAD", "error": "not found"}},
+                              "ODD": _stock_bundle("ODD", _ohlcv(60))},
+                   "forex": {"ohlcv": {"EURUSD=X": None, "JPY=X": nan_hist}}}
+    snap = d.market_snapshot(market_data, ["stocks", "forex"])
+    assert [e["symbol"] for e in snap] == ["ODD", "JPY=X"]
+    json.dumps(snap, allow_nan=False)  # no NaN/inf leaks into the API
+    assert d.market_snapshot({}, ["stocks", "crypto"]) == []
