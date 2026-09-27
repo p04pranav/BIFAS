@@ -3,3 +3,4 @@ __pycache__/
 .env
 test_runner.py
 .bifas_usage.json
+.pytest_cache/
