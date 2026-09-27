@@ -4,6 +4,7 @@ import * as api from "./api.js";
 import { createBriefing } from "./views/briefing.js";
 import { createAgentsPanel, renderAgentNotes } from "./views/agents.js";
 import { createSessionsRail } from "./views/sessions.js";
+import { createSnapshotPanel } from "./views/snapshot.js";
 
 const FALLBACK_DEPTHS = {
   Quick: { max_agents: 3, description: "Fast analysis, 3 agents, ~25s" },
@@ -25,7 +26,7 @@ const el = {
   modelPill: $("model-pill"), modelName: $("model-name"), quota: $("quota"), quotaBar: $("quota-bar"),
   quotaFill: $("quota-fill"), quotaText: $("quota-text"), agents: $("agents"), agentsCount: $("agents-count"),
   agentsEmpty: $("agents-empty"), sessionList: $("session-list"), newSession: $("new-session"),
-  mastheadTitle: $("masthead-title"),
+  mastheadTitle: $("masthead-title"), snapshot: $("snapshot"), snapshotToggle: $("snapshot-toggle"),
 };
 
 const state = {
@@ -48,6 +49,8 @@ const agentsPanel = createAgentsPanel(el.agents, el.agentsCount, {
   },
 });
 
+const snapshotPanel = createSnapshotPanel(el.snapshot, el.snapshotToggle);
+
 function toggleInlineNotes(agent) {
   const li = [...el.agents.children].find((node) => node.querySelector(".agent-name")?.textContent === humanize(agent.name));
   if (!li) return;
@@ -67,11 +70,18 @@ function showDetails(view) {
   state.focused = view;
   if (!view) {
     agentsPanel.clear();
+    snapshotPanel.empty();
     return;
   }
   view.setFocused(true);
-  if (state.run && view === state.run.view) agentsPanel.set(state.run.agents);
-  else agentsPanel.set(view.data.agents || []);
+  if (state.run && view === state.run.view) {
+    agentsPanel.set(state.run.agents);
+    if (state.run.market) snapshotPanel.set(state.run.market);
+    else snapshotPanel.loading();
+  } else {
+    agentsPanel.set(view.data.agents || []);
+    snapshotPanel.set(view.data.market_snapshot || []);
+  }
   if (view.data.id && state.session) setHash(state.session.id, view.data.id);
 }
 
@@ -423,6 +433,10 @@ async function runAnalysis(query, depth) {
         break;
       case "phase": view.activateStep(data.name); break;
       case "data": view.setAssets(data.domains, data.tickers); break;
+      case "market":
+        run.market = data.assets || [];
+        if (state.focused === view) snapshotPanel.set(run.market);
+        break;
       case "tasks":
         run.agents = (data.agents || []).map((a) => ({ ...a, status: "running" }));
         if (state.focused === view) agentsPanel.set(run.agents);
@@ -528,6 +542,7 @@ async function init() {
   setRunning(false);
   setLayout();
   renderMastheadTitle();
+  snapshotPanel.empty();
   try {
     const meta = await api.getMeta();
     renderDepths(meta.depths || FALLBACK_DEPTHS);

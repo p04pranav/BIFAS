@@ -96,6 +96,16 @@
     </main>
 
     <aside class="side" id="side" aria-label="Briefing details">
+      <section class="panel" aria-labelledby="snapshot-title">
+        <div class="panel-head">
+          <h2 class="panel-title" id="snapshot-title">Market snapshot</h2>
+          <button type="button" class="link-btn" id="snapshot-toggle" aria-pressed="false" hidden>
+            <svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M3 8h14M3 12h14M8 4v12"/></svg>
+            <span>View as table</span>
+          </button>
+        </div>
+        <div class="snapshot" id="snapshot"></div>
+      </section>
       <section class="panel" aria-labelledby="agents-title">
         <h2 class="panel-title" id="agents-title">Analysts <span class="panel-count" id="agents-count"></span></h2>
         <ul class="agent-list" id="agents"></ul>
