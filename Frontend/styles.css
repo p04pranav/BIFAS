@@ -269,6 +269,30 @@ kbd {
 }
 .form-error { color: var(--down-text); font-size: var(--step--1); }
 
+/* Preview, context switch and cost */
+.composer-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+.composer-meta:not(:has(> :not([hidden]))) { display: none; }
+.preview { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
+.preview-lead { color: var(--muted); }
+.context-toggle { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; cursor: pointer; position: relative; }
+.context-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.context-switch {
+  width: 30px; height: 18px; border-radius: 999px; background: var(--rule-strong); position: relative; flex: none;
+  transition: background 150ms var(--ease);
+}
+.context-switch::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--paper); transition: transform 150ms var(--ease);
+}
+.context-toggle input:checked + .context-switch { background: var(--amber); }
+.context-toggle input:checked + .context-switch::after { transform: translateX(12px); background: var(--amber-ink); }
+.context-toggle input:focus-visible + .context-switch { box-shadow: var(--focus); }
+.cost { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cost[data-kind="warn"] { color: var(--warn); }
+.composer-slot--thread .composer-meta,
+.composer-slot--thread .cost { flex-basis: 100%; order: 5; }
+.composer-slot--thread .cost { margin-top: -0.2rem; }
+
 /* ---------- Banners ---------- */
 
 .banners { display: flex; flex-direction: column; gap: 0.6rem; max-width: 880px; }

@@ -5,6 +5,7 @@ import { createBriefing } from "./views/briefing.js";
 import { createAgentsPanel, renderAgentNotes } from "./views/agents.js";
 import { createSessionsRail } from "./views/sessions.js";
 import { createSnapshotPanel } from "./views/snapshot.js";
+import { createPreview } from "./views/preview.js";
 
 const FALLBACK_DEPTHS = {
   Quick: { max_agents: 3, description: "Fast analysis, 3 agents, ~25s" },
@@ -27,6 +28,8 @@ const el = {
   quotaFill: $("quota-fill"), quotaText: $("quota-text"), agents: $("agents"), agentsCount: $("agents-count"),
   agentsEmpty: $("agents-empty"), sessionList: $("session-list"), newSession: $("new-session"),
   mastheadTitle: $("masthead-title"), snapshot: $("snapshot"), snapshotToggle: $("snapshot-toggle"),
+  previewAssets: $("preview-assets"), contextToggle: $("context-toggle"), contextInput: $("context-input"),
+  contextLabel: $("context-label"), cost: $("cost"),
 };
 
 const state = {
@@ -50,6 +53,16 @@ const agentsPanel = createAgentsPanel(el.agents, el.agentsCount, {
 });
 
 const snapshotPanel = createSnapshotPanel(el.snapshot, el.snapshotToggle);
+
+const preview = createPreview({
+  query: el.query, assets: el.previewAssets, context: el.contextToggle, contextInput: el.contextInput,
+  contextLabel: el.contextLabel, cost: el.cost,
+}, () => ({
+  sessionId: state.session?.id || null,
+  briefingCount: state.session?.briefings?.length || 0,
+  depth: selectedDepth(),
+  usage: state.usage,
+}));
 
 function toggleInlineNotes(agent) {
   const li = [...el.agents.children].find((node) => node.querySelector(".agent-name")?.textContent === humanize(agent.name));
@@ -103,6 +116,7 @@ function renderUsage(usage) {
   el.quotaBar.setAttribute("aria-valuenow", String(used));
   el.quotaFill.style.width = limit ? `${Math.min(100, (used / limit) * 100)}%` : "0%";
   el.quotaText.textContent = `${used} of ${limit} requests today`;
+  preview.renderCost();
 }
 
 /** Session name in the masthead; click (or Enter) to rename in place. */
@@ -203,6 +217,8 @@ function newSession() {
   setHash(null, null);
   renderMastheadTitle();
   rail.render(state.sessions, null);
+  preview.resetContext();
+  preview.update();
   el.query.focus();
 }
 
@@ -230,20 +246,26 @@ async function openSession(id, briefingId) {
   setHash(session.id, target?.data.id);
   renderMastheadTitle();
   rail.render(state.sessions, session.id);
+  preview.resetContext();
+  preview.update();
 }
 
 // ---------- composer ----------
 
 function renderDepths(depths) {
   state.depths = depths;
+  const current = selectedDepth();
   el.depthOptions.replaceChildren(...Object.entries(depths).map(([name, cfg]) => {
     const id = `depth-${name.toLowerCase()}`;
     const time = (cfg.description.match(/~\s*[\d.]+\s*\w+/) || [""])[0].replace(/\s+/g, "");
+    const cost = preview.estimate(name);
     return h("div", { class: "depth-option" },
-      h("input", { type: "radio", name: "depth", id, value: name, checked: name === "Standard" }),
+      h("input", { type: "radio", name: "depth", id, value: name, checked: name === current,
+        onchange: () => preview.renderCost() }),
       h("label", { for: id, title: cfg.description },
         h("span", { class: "depth-name" }, name),
-        h("span", { class: "depth-meta", dataset: { depth: name } }, `${cfg.max_agents} analysts${time ? `, ${time}` : ""}`)));
+        h("span", { class: "depth-meta", dataset: { depth: name } },
+          `${cfg.max_agents} analysts${time ? `, ${time}` : ""}${cost ? `, ${cost} requests` : ""}`)));
   }));
 }
 
@@ -258,7 +280,7 @@ function renderExamples(examples) {
 }
 
 function selectedDepth() {
-  return (el.composer.querySelector('input[name="depth"]:checked') || {}).value || "Standard";
+  return (el.composer?.querySelector('input[name="depth"]:checked') || {}).value || "Standard";
 }
 
 /** Start screen shows the big composer; once there are briefings it sits under the thread. */
@@ -359,7 +381,7 @@ function removeBriefingView(view) {
 async function runAnalysis(query, depth) {
   el.banners.replaceChildren();
   const view = addBriefingView({ query, depth, live: true });
-  const run = { view, controller: new AbortController(), agents: [], finished: false };
+  const run = { view, controller: new AbortController(), agents: [], finished: false, context: preview.useContext() };
   state.run = run;
   showDetails(view);
   setRunning(true);
@@ -459,7 +481,7 @@ async function runAnalysis(query, depth) {
   };
 
   try {
-    await api.streamAnalyze({ query, depth, session: state.session?.id }, onEvent, run.controller.signal);
+    await api.streamAnalyze({ query, depth, session: state.session?.id, context: run.context }, onEvent, run.controller.signal);
     if (!run.finished) fail("The server closed the connection before the analysis finished.");
   } catch (err) {
     if (err.name === "AbortError") {
@@ -474,6 +496,8 @@ async function runAnalysis(query, depth) {
   } finally {
     if (state.run === run) state.run = null;
     setRunning(false);
+    preview.resetContext();
+    preview.update();
     // A cancelled or failed first run leaves no saved session behind.
     if (!run.view.data.id && state.session && !state.session.briefings.length) refreshSessions();
   }
@@ -545,6 +569,7 @@ async function init() {
   snapshotPanel.empty();
   try {
     const meta = await api.getMeta();
+    await preview.loadEstimates();
     renderDepths(meta.depths || FALLBACK_DEPTHS);
     renderExamples(meta.examples || FALLBACK_EXAMPLES);
     renderUsage(meta.usage);
@@ -560,6 +585,7 @@ async function init() {
   await refreshSessions();
   const params = new URLSearchParams(location.hash.slice(1));
   if (params.get("s")) await openSession(params.get("s"), params.get("b"));
+  preview.update();
 }
 
 init();

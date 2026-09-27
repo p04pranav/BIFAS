@@ -79,6 +79,14 @@
         <label for="query" class="composer-label" id="composer-label">Your question</label>
         <textarea id="query" name="query" rows="3" maxlength="2000" required
           placeholder="Is gold still a hedge against a weaker dollar?"></textarea>
+        <div class="composer-meta">
+          <label class="context-toggle" id="context-toggle" hidden>
+            <input type="checkbox" id="context-input" checked>
+            <span class="context-switch" aria-hidden="true"></span>
+            <span id="context-label">Builds on earlier briefings</span>
+          </label>
+          <div class="preview" id="preview-assets" aria-live="polite" hidden></div>
+        </div>
         <div class="examples" id="examples" role="group" aria-label="Example questions"></div>
         <div class="controls">
           <fieldset class="depth">
@@ -90,6 +98,7 @@
             <p class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to run</p>
           </div>
         </div>
+        <p class="cost" id="cost" aria-live="polite" hidden></p>
         <p class="form-error" id="form-error" role="alert" hidden></p>
       </form>
       <p class="sr-only" id="live" aria-live="polite"></p>
