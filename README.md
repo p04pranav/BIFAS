@@ -11,13 +11,13 @@
 ![Frontend](https://img.shields.io/badge/HTML_%2F_CSS_%2F_JS-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
 ![Gemini 3.5 Flash Lite](https://img.shields.io/badge/Gemini_3.5_Flash_Lite-4285F4?style=flat-square&logo=google&logoColor=white)
 ![License](https://img.shields.io/badge/License-Proprietary-red?style=flat-square)
-![APIs](https://img.shields.io/badge/Data_Sources-7_Keyless_APIs-00C853?style=flat-square)
+![APIs](https://img.shields.io/badge/Data_Sources-6_Keyless_APIs-00C853?style=flat-square)
 ![Tests](https://img.shields.io/badge/Tests-60_unit_%2B_6_live_passed-brightgreen?style=flat-square)
 ![Cost](https://img.shields.io/badge/Cost-%240-gold?style=flat-square)
 
 <br/>
 
-*A dynamic multi-agent system that decomposes financial queries into independent micro-tasks, fetches real-time market data from **7 keyless public APIs** (stocks, crypto, forex, commodities), executes analysis in parallel using specialized AI agents powered by **Google Gemini 3.5 Flash Lite** (with automatic Gemma 4 26B fallback), and synthesizes results into executive-grade reports — all for **\$0**.*
+*A dynamic multi-agent system that decomposes financial queries into independent micro-tasks, fetches real-time market data from **6 keyless public APIs** (stocks, crypto, forex, commodities), computes technical indicators locally, executes analysis in parallel using specialized AI agents powered by **Google Gemini 3.5 Flash Lite** (with automatic Gemma 4 26B fallback), and synthesizes results into executive-grade reports — all for **\$0**.*
 
 </div>
 
@@ -28,7 +28,7 @@
 | | Innovation | Detail |
 |---|-----------|--------|
 | ⚡ | **Sprint Architecture** | Parallel agent execution — completes analysis in ~3-5 minutes |
-| 📡 | **7 Keyless APIs** | Live market data — agents analyze real numbers, not hallucinations |
+| 📡 | **6 Keyless APIs** | Live market data plus locally computed technicals — agents analyze real numbers, not hallucinations |
 | 💸 | **100% Free** | Google AI free tier (Gemini 3.5 Flash Lite, Gemma 4 fallback), no paid API keys required |
 | 🎯 | **Auto Domain Detection** | Queries auto-classified as stocks / crypto / forex / commodities |
 | 💉 | **Per-Ticker Injection** | Each agent sees only their assigned asset's real data |
@@ -180,7 +180,7 @@ graph TD
     APP["🌐 server.py<br/>FastAPI + SSE"]
     ENG["⚙️ engine.py<br/>Sprint Architecture"]
     AGT["🤖 bifas_agents.py<br/>Prompts + Config"]
-    DAT["📡 data_fetcher.py<br/>7 API Integrations"]
+    DAT["📡 data_fetcher.py<br/>6 API Integrations"]
     CFG["🔧 config.py<br/>Google AI Client"]
 
     UI -->|"GET /api/analyze (SSE)"| APP
@@ -193,7 +193,7 @@ graph TD
 
     subgraph External["☁️ External Services"]
         GEMMA["🧠 Gemini 3.5 Flash Lite<br/>(fallback: Gemma 4 26B A4B)"]
-        APIS["📡 7 Keyless APIs"]
+        APIS["📡 6 Keyless APIs"]
     end
 
     CFG -.->|"google.genai"| GEMMA
@@ -305,7 +305,7 @@ BIFAS/
 - **Python 3.10+**
 - A free **Google Gemini API key** — [Get one here](https://aistudio.google.com/apikey) (no credit card required)
 
-> **That's it.** No other API keys needed — all 7 financial data sources are keyless public APIs.
+> **That's it.** No other API keys needed — all 6 market data sources are keyless public APIs, and technical indicators are computed locally.
 
 ### Installation
 
@@ -429,7 +429,7 @@ pytest -q
 
 ### v5.0 (Sprint + Live Data) — 9/9 PASSED
 
-All 9 test configurations (3 domains × 3 depths) passed with live data using Google Gemma 4 31B.
+All 9 test configurations (3 domains × 3 depths) passed with live data using MiMo-V2.5, the model BIFAS used at the time (see [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md)).
 
 | # | Domain | Depth | Agents | Time | Audit |
 |---|--------|-------|--------|------|-------|
