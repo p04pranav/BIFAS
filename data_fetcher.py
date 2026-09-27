@@ -105,6 +105,11 @@ COMMODITY_YF_MAP = {
     "palladium": "PA=F",
 }
 
+COMMODITY_NAMES = {
+    "GC=F": "Gold", "SI=F": "Silver", "CL=F": "Crude Oil (WTI)", "BZ=F": "Brent Crude",
+    "HG=F": "Copper", "NG=F": "Natural Gas", "PL=F": "Platinum", "PA=F": "Palladium",
+}
+
 
 # Uppercase words that look like tickers but are not stocks.
 TICKER_STOPWORDS = {
@@ -571,21 +576,55 @@ def fetch_commodity_data(symbols=None):
     for sym in symbols:
         try:
             t = yf.Ticker(sym)
-            hist = t.history(period="5d")
-            info = t.info or {}
+            hist = t.history(period="3mo")
             if not hist.empty:
                 latest = hist.iloc[-1]
                 result[sym] = {
-                    "name": COMMODITY_YF_MAP.get(sym, sym),
+                    "name": COMMODITY_NAMES.get(sym, sym),
                     "symbol": sym,
                     "price": float(latest["Close"]),
                     "open": float(latest["Open"]),
                     "high": float(latest["High"]),
                     "low": float(latest["Low"]),
+                    "hist": hist,
                 }
         except Exception:
             pass
     return result
+
+
+def format_commodity_context(sym, data, technicals):
+    name = data.get("name", sym)
+    lines = [f"REAL MARKET DATA — {name} ({sym}):"]
+    lines.append("")
+    lines.append("Price (yfinance futures, 15-min delayed):")
+    lines.append(f"  Current: ${data['price']:,.2f}")
+    lines.append(f"  Latest Session: O=${data['open']:,.2f} H=${data['high']:,.2f} L=${data['low']:,.2f}")
+    hist = data.get("hist")
+    if hist is not None and len(hist) >= 2:
+        prev = hist["Close"].iloc[-2]
+        lines.append(f"  Daily Change: {(data['price'] - prev) / prev * 100:+.2f}%")
+    if hist is not None and len(hist) >= 22:
+        month_ago = hist["Close"].iloc[-22]
+        lines.append(f"  1-Month Change: {(data['price'] - month_ago) / month_ago * 100:+.2f}%")
+    if technicals:
+        lines.append("")
+        lines.append("Technical Indicators (computed from OHLCV):")
+        if technicals.get("rsi"):
+            lines.append(f"  RSI (14): {technicals['rsi']}")
+        if technicals.get("macd") is not None:
+            lines.append(f"  MACD: {technicals['macd']} (Signal: {technicals.get('macd_signal', 'N/A')})")
+        if technicals.get("sma_50"):
+            lines.append(f"  SMA (50): ${technicals['sma_50']:,.2f}")
+        if technicals.get("bb_upper"):
+            lines.append(f"  Bollinger: ${technicals['bb_lower']:,.2f} - ${technicals['bb_upper']:,.2f}")
+    if hist is not None and not hist.empty:
+        lines.append("")
+        lines.append("Recent Price Action (last 5 days):")
+        for idx, row in hist.tail(5).iterrows():
+            date_str = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
+            lines.append(f"  {date_str}: O={row['Open']:.2f} H={row['High']:.2f} L={row['Low']:.2f} C={row['Close']:.2f}")
+    return "\n".join(lines)
 
 
 def format_forex_context(pair_yf_sym, ohlcv_df, rates, commodities):
@@ -642,7 +681,7 @@ def fetch_all_data(domains, tickers_map):
         if "forex" in tickers_map:
             futures[executor.submit(_fetch_forex_bundle, tickers_map["forex"])] = ("forex", None)
         if "commodities" in tickers_map:
-            futures[executor.submit(fetch_commodity_data, tickers_map.get("commodities"))] = ("commodities", None)
+            futures[executor.submit(_fetch_commodity_bundle, tickers_map["commodities"])] = ("commodities", None)
         for future in as_completed(futures):
             key, subkey = futures[future]
             try:
@@ -690,6 +729,15 @@ def _fetch_crypto_bundle(coin_ids):
     return {"market": market, "onchain": onchain, "sentiment": sentiment, "mvrv": mvrv_data, "contexts": contexts}
 
 
+def _fetch_commodity_bundle(symbols):
+    data = fetch_commodity_data(symbols)
+    contexts = {
+        sym: format_commodity_context(sym, d, compute_technicals(d.get("hist")))
+        for sym, d in data.items()
+    }
+    return {"data": data, "contexts": contexts}
+
+
 def _fetch_forex_bundle(pairs):
     ohlcv = fetch_forex_ohlcv(pairs)
     rates = fetch_forex_rates("USD")
@@ -701,35 +749,55 @@ def _fetch_forex_bundle(pairs):
     return {"ohlcv": ohlcv, "rates": rates, "commodities": commodities, "contexts": contexts}
 
 
+MAX_FALLBACK_CONTEXT_CHARS = 20000
+
+
+def _normalize_agent_name(agent_name):
+    return re.sub(r"[_\-]+", " ", agent_name).lower()
+
+
+def _name_mentions(name_norm, key):
+    """Short keys (tickers like 'V', 'ETH') must be whole words; longer ones may be substrings."""
+    key = key.lower()
+    if len(key) <= 4:
+        return _has_term(name_norm, key)
+    return key in name_norm
+
+
+def _aliases(symbol, name_map):
+    """All human names that map to a symbol, plus the symbol itself."""
+    return [symbol] + [name for name, sym in name_map.items() if sym == symbol]
+
+
+def _domain_contexts(market_data, domains):
+    """(aliases, context) pairs for every fetched asset, in detected-domain order."""
+    entries = []
+    for domain in domains:
+        if domain == "stocks" and market_data.get("stocks"):
+            for ticker, bundle in market_data["stocks"].items():
+                entries.append((_aliases(ticker, TICKER_MAP), bundle.get("context", "")))
+        elif domain == "crypto" and market_data.get("crypto"):
+            for cid, ctx in market_data["crypto"].get("contexts", {}).items():
+                entries.append((_aliases(cid, CRYPTO_MAP), ctx))
+        elif domain == "forex" and market_data.get("forex"):
+            for pair_sym, ctx in market_data["forex"].get("contexts", {}).items():
+                aliases = _aliases(pair_sym, FOREX_YF_MAP)
+                aliases += [a.replace("/", " ") for a in aliases if "/" in a]
+                entries.append((aliases, ctx))
+        elif domain == "commodities" and market_data.get("commodities"):
+            for sym, ctx in market_data["commodities"].get("contexts", {}).items():
+                aliases = _aliases(sym, COMMODITY_YF_MAP) + [COMMODITY_NAMES.get(sym, sym)]
+                entries.append((aliases, ctx))
+    return [(aliases, ctx) for aliases, ctx in entries if ctx]
+
+
 def get_ticker_data_for_agent(agent_name, market_data, domains):
-    name_lower = agent_name.lower()
-    if "stocks" in domains and market_data.get("stocks"):
-        for ticker, bundle in market_data["stocks"].items():
-            if ticker.lower() in name_lower:
-                return bundle.get("context", "No data available")
-        all_contexts = []
-        for ticker, bundle in market_data["stocks"].items():
-            ctx = bundle.get("context", "")
-            if ctx:
-                all_contexts.append(ctx)
-        if all_contexts:
-            return "\n\n".join(all_contexts)
-    if "crypto" in domains and market_data.get("crypto"):
-        crypto = market_data["crypto"]
-        for cid, ctx in crypto.get("contexts", {}).items():
-            symbol = cid.replace("bitcoin", "btc").replace("ethereum", "eth")
-            if symbol in name_lower or cid in name_lower:
-                return ctx
-        all_contexts = list(crypto.get("contexts", {}).values())
-        if all_contexts:
-            return "\n\n".join(all_contexts)
-    if "forex" in domains and market_data.get("forex"):
-        forex = market_data["forex"]
-        for pair_sym, ctx in forex.get("contexts", {}).items():
-            pair_short = pair_sym.replace("=X", "").replace("=F", "").lower()
-            if pair_short in name_lower or pair_short.replace("/", "") in name_lower:
-                return ctx
-        all_contexts = list(forex.get("contexts", {}).values())
-        if all_contexts:
-            return "\n\n".join(all_contexts)
+    """Give an agent the data for the assets its name mentions, or everything if none match."""
+    name_norm = _normalize_agent_name(agent_name)
+    entries = _domain_contexts(market_data, domains)
+    matched = [ctx for aliases, ctx in entries if any(_name_mentions(name_norm, a) for a in aliases)]
+    if matched:
+        return "\n\n".join(dict.fromkeys(matched))
+    if entries:
+        return "\n\n".join(ctx for _, ctx in entries)[:MAX_FALLBACK_CONTEXT_CHARS]
     return "No specific market data available for this agent."
