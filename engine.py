@@ -1,5 +1,5 @@
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from typing import Literal
 from pydantic import BaseModel
 import config
@@ -20,6 +20,7 @@ from data_fetcher import (
 TIMEOUT_SECONDS = 300  # 5-minute hard timeout
 MAX_AGENTS = 12
 MAX_WORKERS = 6
+FINISH_RESERVE_SECONDS = 60  # time kept back from agents for synthesis + audit
 MAX_ANALYSES_CHARS = 60000
 
 
@@ -163,6 +164,21 @@ def audit_report(report, user_query):
     return "STATUS: UNVERIFIED — auditor unavailable"
 
 
+def _run_before(deadline, fn, *args):
+    """Run fn(*args), giving up (returning None) if it is still running at the deadline."""
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        return None
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(fn, *args)
+    try:
+        return future.result(timeout=remaining)
+    except FuturesTimeout:
+        return None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def run_bifas_pipeline(user_query, depth="Standard"):
     """
     Sprint-based pipeline with parallel execution.
@@ -184,6 +200,8 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         "fallback_used": False,
     }
     models = set()
+    guardrails = []
+    deadline = start_time + TIMEOUT_SECONDS
 
     try:
         # PHASE 0: Domain Detection + Data Pre-Fetch
@@ -193,7 +211,13 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         result["data_sources"] = list(tickers_map.keys())
 
         # PHASE 1: Task Decomposition (1 call)
-        tasks, decomposition = generate_tasks(user_query, max_agents)
+        decomposed = _run_before(deadline - FINISH_RESERVE_SECONDS, generate_tasks, user_query, max_agents)
+        if decomposed is None:
+            guardrails.append("Timeout during task decomposition")
+            result["final_report"] = "No analysis completed before the time limit."
+            result["audit_status"] = "Skipped - timeout"
+            return result
+        tasks, decomposition = decomposed
         models.add(decomposition.model)
         result["tasks"] = tasks
         result["agent_squad"] = [{"name": t["agent_name"], "prompt": t["task"]} for t in tasks]
@@ -204,90 +228,75 @@ def run_bifas_pipeline(user_query, depth="Standard"):
                 task["agent_name"], market_data, domains
             )
 
-        # Check timeout
-        if time.time() - start_time > TIMEOUT_SECONDS:
-            result["guardrail_triggered"] = "Timeout after task decomposition"
-            result["execution_time"] = time.time() - start_time
-            return result
-
         # Initialize room
         room_id = band.create_room(name="BIFAS-Session")
         band.send_message(room_id, "System", f"BIFAS Query: {user_query}", msg_type="system")
 
-        # PHASE 2: Parallel Sprint Execution (N calls, concurrent)
+        # PHASE 2: Parallel Sprint Execution (N calls, concurrent).
+        # Agents must finish early enough to leave time for synthesis and audit.
         analyses = {}
         failed_agents = []
+        agent_deadline = deadline - FINISH_RESERVE_SECONDS
 
-        with ThreadPoolExecutor(max_workers=min(len(tasks), MAX_WORKERS)) as executor:
-            future_to_task = {
-                executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
-                for t in tasks
-            }
+        executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_WORKERS))
+        future_to_task = {
+            executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
+            for t in tasks
+        }
+        try:
+            for future in as_completed(future_to_task, timeout=max(0, agent_deadline - time.time())):
+                agent_name, result_text, success, model = future.result()
+                if success:
+                    models.add(model)
+                    analyses[agent_name] = result_text
+                    band.send_message(room_id, agent_name, result_text, msg_type="contribution")
+                    result["rounds"].append({
+                        "round": len(result["rounds"]) + 1,
+                        "next_agent": agent_name,
+                        "contribution": result_text[:300],
+                        "contribution_full": result_text,
+                    })
+                else:
+                    failed_agents.append(agent_name)
+                    band.send_message(room_id, agent_name, "[FAILED]", msg_type="request")
+        except FuturesTimeout:
+            unfinished = [t["agent_name"] for f, t in future_to_task.items() if not f.done()]
+            guardrails.append(f"Timeout during agent execution — skipped: {', '.join(unfinished)}")
+        finally:
+            # Never wait for stragglers: queued agents are cancelled, running ones are abandoned.
+            executor.shutdown(wait=False, cancel_futures=True)
 
-            for future in as_completed(future_to_task):
-                # Check timeout
-                if time.time() - start_time > TIMEOUT_SECONDS:
-                    result["guardrail_triggered"] = "Timeout during agent execution"
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-
-                task = future_to_task[future]
-                try:
-                    agent_name, result_text, success, model = future.result(timeout=60)
-                    if success:
-                        models.add(model)
-                        analyses[agent_name] = result_text
-                        band.send_message(room_id, agent_name, result_text, msg_type="contribution")
-                        result["rounds"].append({
-                            "round": len(result["rounds"]) + 1,
-                            "next_agent": agent_name,
-                            "contribution": result_text[:300],
-                            "contribution_full": result_text,
-                        })
-                    else:
-                        failed_agents.append(agent_name)
-                        band.send_message(room_id, agent_name, "[FAILED]", msg_type="request")
-                except Exception:
-                    failed_agents.append(task["agent_name"])
-
-        # Check timeout
-        if time.time() - start_time > TIMEOUT_SECONDS:
-            result["guardrail_triggered"] = "Timeout after agent execution"
-            result["execution_time"] = time.time() - start_time
-            if not analyses:
-                return result
+        if failed_agents:
+            guardrails.append(f"Failed agents: {', '.join(failed_agents)}")
 
         # PHASE 3: Synthesis (1 call)
         if analyses:
-            final_report = synthesize_report(analyses, user_query)
+            final_report = _run_before(deadline, synthesize_report, analyses, user_query)
+            if final_report is None:
+                guardrails.append("Timeout during synthesis — showing raw agent analyses")
+                final_report = "\n\n".join(f"### {name}\n{text}" for name, text in analyses.items())
+                result["audit_status"] = "Skipped - timeout"
             result["final_report"] = final_report
 
-            # Check timeout
-            if time.time() - start_time > TIMEOUT_SECONDS:
-                result["guardrail_triggered"] = "Timeout after synthesis"
-                result["audit_status"] = "Skipped - timeout"
-                result["total_messages"] = len(band.get_room_history(room_id))
-                result["execution_time"] = time.time() - start_time
-                return result
-
             # PHASE 4: Audit (1 call)
-            result["audit_status"] = audit_report(final_report, user_query)
+            if not result["audit_status"]:
+                audit = _run_before(deadline, audit_report, final_report, user_query)
+                if audit is None:
+                    guardrails.append("Timeout during audit")
+                    audit = "Skipped - timeout"
+                result["audit_status"] = audit
         else:
             result["final_report"] = "No agent analyses completed."
             result["audit_status"] = "FAILED - no analyses"
 
         result["total_messages"] = len(band.get_room_history(room_id))
-        result["execution_time"] = time.time() - start_time
-
-        # Report failures
-        if failed_agents:
-            result["guardrail_triggered"] = f"Failed agents: {', '.join(failed_agents)}"
 
     except Exception as e:
         result["audit_status"] = f"Pipeline error: {str(e)}"
-        result["execution_time"] = time.time() - start_time
         raise
     finally:
+        result["guardrail_triggered"] = "; ".join(guardrails) or None
+        result["execution_time"] = time.time() - start_time
         result["models_used"] = sorted(models)
         result["fallback_used"] = any(m != config.PRIMARY_MODEL for m in models)
 
