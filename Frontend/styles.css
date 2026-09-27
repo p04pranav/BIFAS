@@ -603,6 +603,30 @@ kbd {
 .briefing-tools { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; color: var(--muted); }
 .tools-confirm { white-space: nowrap; }
 
+/* ---------- Report reading ---------- */
+
+.section-tabs {
+  position: sticky; top: var(--masthead-h); z-index: 4;
+  display: flex; gap: 0.25rem; overflow-x: auto; scrollbar-width: none;
+  margin: 1.1rem -1.4rem 0; padding: 0.55rem 1.4rem;
+  background: rgba(20, 32, 49, 0.96); backdrop-filter: blur(6px);
+  border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+}
+.section-tabs::-webkit-scrollbar { display: none; }
+.section-tabs + .memo-body { border-top: 0; margin-top: 0; }
+.section-tab {
+  flex: none; background: none; border: 0; padding: 0.35rem 0.7rem; border-radius: 999px;
+  color: var(--muted); font-size: 0.82rem; white-space: nowrap;
+  transition: color 150ms var(--ease), background 150ms var(--ease);
+}
+.section-tab:hover { color: var(--paper); background: var(--panel-2); }
+.section-tab.is-active { color: var(--paper); background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--rule-strong); }
+.section-tab:focus-visible { border-radius: 999px; }
+.prose h2, .prose h3 { scroll-margin-top: calc(var(--masthead-h) + 3.5rem); }
+.prose h2:focus, .prose h3:focus { outline: none; }
+.prose .lead { font-size: 1.08rem; line-height: 1.7; padding: 0.2rem 0 0.2rem 1rem; border-left: 3px solid var(--amber); }
+.prose .lead > * + * { margin-top: 0.7em; }
+
 /* ---------- Footer ---------- */
 
 .site-foot { border-top: 1px solid var(--rule); color: var(--muted); font-size: 0.78rem; }

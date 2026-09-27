@@ -1,6 +1,7 @@
 // One briefing in the thread: header, live progress, verdict stamp, report and actions.
 import { h, ICONS, renderMarkdown, parseVerdict, formatElapsed, relativeTime, prettyModel,
   assetNames, prefersReducedMotion } from "../util.js";
+import { enhanceReport } from "./sections.js";
 
 const STEPS = [
   ["data", "Market data"],
@@ -35,14 +36,16 @@ export function createBriefing(data, handlers = {}) {
   const stampReason = h("p", { class: "stamp-reason", hidden: true });
   const assets = h("div", { class: "assets", "aria-label": "Assets analyzed" });
   const metrics = h("dl", { class: "metrics", hidden: true });
+  const tabs = h("nav", { class: "section-tabs", "aria-label": "Report sections", hidden: true });
   const report = h("div", { class: "memo-body", "aria-busy": view.live ? "true" : "false" });
+  let cleanupSections = () => {};
   const copyBtn = h("button", { type: "button", class: "ghost", html: `${ICONS.copy}<span>Copy report</span>` });
   const downloadBtn = h("button", { type: "button", class: "ghost", html: `${ICONS.download}<span>Download .md</span>` });
   const memoActions = h("footer", { class: "memo-actions", hidden: true }, copyBtn, downloadBtn);
 
   const memo = h("div", { class: "memo" },
     h("div", { class: "memo-head" }, h("div", { class: "memo-context" }, assets), stamp),
-    stampReason, metrics, report, memoActions);
+    stampReason, metrics, tabs, report, memoActions);
   const body = h("div", { class: "briefing-body" }, progress, memo);
   const el = h("article", { class: "briefing", dataset: { id: data.id || "" }, tabindex: "-1" },
     h("header", { class: "briefing-head" }, toggle, actionsMenu), body);
@@ -129,6 +132,8 @@ export function createBriefing(data, handlers = {}) {
     report.className = "memo-body prose";
     report.innerHTML = markdown ? renderMarkdown(markdown) : '<p class="empty-note">No briefing was produced.</p>';
     report.setAttribute("aria-busy", "false");
+    cleanupSections();
+    cleanupSections = markdown ? enhanceReport(report, tabs) : () => {};
     memoActions.hidden = !markdown;
   };
 
