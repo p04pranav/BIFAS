@@ -248,6 +248,8 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
         tickers_map = extract_tickers(user_query, domains)
         market_data = fetch_all_data(domains, tickers_map)
         result["data_sources"] = list(tickers_map.keys())
+        result["domains"] = domains
+        result["tickers"] = tickers_map
         emit("data", domains=domains, tickers=tickers_map)
         result["market_snapshot"] = market_snapshot(market_data, domains, tickers_map)
         emit("market", assets=result["market_snapshot"])

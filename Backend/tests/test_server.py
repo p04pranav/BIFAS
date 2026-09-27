@@ -71,7 +71,7 @@ def test_analyze_streams_events_in_order(client, monkeypatch):
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/event-stream")
     events = parse_sse(res.text)
-    assert [e for e, _ in events] == ["phase", "data", "tasks", "agent", "report", "audit", "done"]
+    assert [e for e, _ in events] == ["session", "phase", "data", "tasks", "agent", "report", "audit", "done"]
     done = events[-1][1]
     assert done["result"]["audit_status"].startswith("STATUS: APPROVED")
     assert "market_data" not in done["result"]["tasks"][0]  # bulky context is stripped
@@ -83,7 +83,9 @@ def test_analyze_reports_pipeline_errors(client, monkeypatch):
         raise RuntimeError("model down")
     monkeypatch.setattr(server, "run_bifas_pipeline", broken)
     events = parse_sse(client.get("/api/analyze", params={"query": "NVDA", "depth": "Quick"}).text)
-    assert events == [("error", {"message": "Analysis failed: model down"})]
+    assert [e for e, _ in events] == ["session", "error"]
+    assert events[1][1] == {"message": "Analysis failed: model down"}
+    assert client.get("/api/sessions").json()["sessions"] == []  # the empty new session is removed
 
 
 def test_busy_server_returns_429_and_frees_slots(client, monkeypatch):
@@ -158,3 +160,60 @@ def test_client_disconnect_cancels_the_run(client, monkeypatch):
         time.sleep(0.1)
     else:
         raise AssertionError("run slot was not released")
+
+
+def test_session_crud(client):
+    assert client.get("/api/sessions").json() == {"sessions": []}
+    created = client.post("/api/sessions", json={}).json()
+    assert created["title"] == "New session" and created["briefings"] == []
+    sid = created["id"]
+    renamed = client.patch(f"/api/sessions/{sid}", json={"title": "  Gold   macro "}).json()
+    assert renamed["title"] == "Gold macro"
+    assert client.patch(f"/api/sessions/{sid}", json={"title": "   "}).status_code == 422
+    assert client.patch(f"/api/sessions/{sid}", json={"title": "x" * 81}).status_code == 422
+    assert [s["title"] for s in client.get("/api/sessions").json()["sessions"]] == ["Gold macro"]
+    assert client.delete(f"/api/sessions/{sid}").status_code == 204
+    assert client.get(f"/api/sessions/{sid}").status_code == 404
+    assert client.delete(f"/api/sessions/{sid}").status_code == 404
+
+
+@pytest.mark.parametrize("bad_id", ["..%2F..%2Fsecret", "20260927-000000-zzzzzz", "abc"])
+def test_session_ids_are_validated(client, bad_id):
+    # Malformed ids are refused: by id validation (404) or, for encoded slashes, by routing (405).
+    assert client.get(f"/api/sessions/{bad_id}").status_code in (404, 405)
+    assert client.delete(f"/api/sessions/{bad_id}").status_code in (404, 405)
+
+
+def test_analyze_without_session_creates_and_saves_one(client, monkeypatch, isolated_memory):
+    monkeypatch.setattr(server, "run_bifas_pipeline", fake_pipeline)
+    events = parse_sse(client.get("/api/analyze", params={"query": "Analyze NVDA outlook", "depth": "Quick"}).text)
+    session_event = events[0][1]
+    assert events[0][0] == "session" and session_event["created"] is True
+    done = events[-1][1]
+    assert done["session_id"] == session_event["id"]
+    assert done["session"]["title"] == "Analyze NVDA outlook" and done["session"]["briefing_count"] == 1
+    saved = client.get(f"/api/sessions/{done['session_id']}").json()
+    briefing = saved["briefings"][0]
+    assert briefing["id"] == done["briefing_id"] and briefing["query"] == "Analyze NVDA outlook"
+    assert briefing["final_report"] == "# Report"
+    assert (isolated_memory / "sessions" / f"{done['session_id']}.json").exists()
+
+
+def test_analyze_appends_to_existing_session(client, monkeypatch):
+    monkeypatch.setattr(server, "run_bifas_pipeline", fake_pipeline)
+    sid = client.post("/api/sessions", json={"title": "Tech"}).json()["id"]
+    for q in ("Analyze NVDA", "What about AAPL?"):
+        events = parse_sse(client.get("/api/analyze", params={"query": q, "depth": "Quick", "session": sid}).text)
+        assert events[0][1] == {"id": sid, "title": "Tech", "created": False}
+    session = client.get(f"/api/sessions/{sid}").json()
+    assert [b["query"] for b in session["briefings"]] == ["Analyze NVDA", "What about AAPL?"]
+    assert session["title"] == "Tech"  # a chosen name is never auto-replaced
+    bid = session["briefings"][0]["id"]
+    assert client.delete(f"/api/sessions/{sid}/briefings/{bid}").status_code == 204
+    assert [b["query"] for b in client.get(f"/api/sessions/{sid}").json()["briefings"]] == ["What about AAPL?"]
+    assert client.delete(f"/api/sessions/{sid}/briefings/{bid}").status_code == 404
+
+
+def test_analyze_unknown_session_is_404(client):
+    res = client.get("/api/analyze", params={"query": "NVDA", "depth": "Quick", "session": "20260101-000000-abcdef"})
+    assert res.status_code == 404

@@ -10,6 +10,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import llm  # noqa: E402
+import memory  # noqa: E402
 
 
 def fake_response(text="", thought=None, finish_reason="STOP", parsed=None):
@@ -32,3 +33,10 @@ def isolated_llm(tmp_path, monkeypatch):
     # Replace llm's view of the time module only; the real time.sleep stays intact.
     monkeypatch.setattr(llm, "time", SimpleNamespace(time=time.time, sleep=lambda s: None))
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolated_memory(tmp_path, monkeypatch):
+    """Sessions are written to a temp folder, never the real Memory/."""
+    monkeypatch.setattr(memory, "ROOT", tmp_path / "Memory")
+    yield tmp_path / "Memory"

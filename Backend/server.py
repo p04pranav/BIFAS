@@ -14,10 +14,15 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import memory
 
 from bifas_agents import DEPTH_CONFIG
 from data_fetcher import detect_domains, extract_tickers
@@ -43,7 +48,7 @@ app = FastAPI(title="BIFAS API", version="7.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in os.getenv("BIFAS_CORS_ORIGINS", "*").split(",")],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -85,6 +90,67 @@ def preview(query: str = Query("", max_length=MAX_QUERY_CHARS)):
     }
 
 
+class SessionCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class SessionRename(BaseModel):
+    title: str
+
+
+def _session_or_404(session_id):
+    try:
+        return memory.get_session(session_id)
+    except memory.NotFound:
+        raise HTTPException(404, "That session doesn't exist. It may have been deleted.")
+
+
+@app.get("/api/sessions")
+def list_sessions():
+    return {"sessions": memory.list_sessions()}
+
+
+@app.post("/api/sessions", status_code=201)
+def create_session(body: Optional[SessionCreate] = None):
+    try:
+        return memory.create_session(body.title if body else None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str):
+    return _session_or_404(session_id)
+
+
+@app.patch("/api/sessions/{session_id}")
+def rename_session(session_id: str, body: SessionRename):
+    try:
+        return memory.summarize(memory.rename_session(session_id, body.title))
+    except memory.NotFound:
+        raise HTTPException(404, "That session doesn't exist. It may have been deleted.")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/api/sessions/{session_id}", status_code=204)
+def delete_session(session_id: str):
+    try:
+        memory.delete_session(session_id)
+    except memory.NotFound:
+        raise HTTPException(404, "That session doesn't exist. It may have been deleted.")
+    return Response(status_code=204)
+
+
+@app.delete("/api/sessions/{session_id}/briefings/{briefing_id}", status_code=204)
+def delete_briefing(session_id: str, briefing_id: str):
+    try:
+        memory.delete_briefing(session_id, briefing_id)
+    except memory.NotFound:
+        raise HTTPException(404, "That briefing doesn't exist. It may have been deleted.")
+    return Response(status_code=204)
+
+
 def _public_result(result):
     """The pipeline result without the bulky per-agent market data."""
     tasks = [{k: v for k, v in t.items() if k != "market_data"} for t in result.get("tasks", [])]
@@ -100,22 +166,33 @@ def analyze(
     request: Request,
     query: str = Query(..., max_length=MAX_QUERY_CHARS),
     depth: str = Query("Standard"),
+    session: Optional[str] = Query(None),
 ):
     """Run the pipeline and stream its progress as Server-Sent Events.
 
-    Events: phase, data, market, tasks, agent, report, audit, then done (full
-    result and updated usage) or error. If the client disconnects, the run is
-    cancelled before its next model call so no quota is wasted.
+    Events: session (the session the briefing is saved to), phase, data, market,
+    tasks, agent, report, audit, then done (full result, updated usage and the
+    saved briefing's ids) or error. Without a session id a new session is
+    created. If the client disconnects, the run is cancelled before its next
+    model call so no quota is wasted, and nothing is saved.
     """
     query = query.strip()
     if not query:
         raise HTTPException(422, "Enter a query to analyze.")
     if depth not in DEPTH_CONFIG:
         raise HTTPException(422, f"Depth must be one of: {', '.join(DEPTH_CONFIG)}.")
+    if session is not None:
+        session_data = _session_or_404(session)
+        created_session = False
     if not _run_slots.acquire(blocking=False):
         raise HTTPException(429, "Too many analyses are running. Try again in a minute.")
+    if session is None:
+        session_data = memory.create_session()
+        created_session = True
+    session_id = session_data["id"]
 
     events = queue.Queue()
+    events.put(("session", {"id": session_id, "title": session_data["title"], "created": created_session}))
     cancel = threading.Event()
 
     def worker():
@@ -123,9 +200,20 @@ def analyze(
             result = run_bifas_pipeline(query, depth, on_event=lambda t, d: events.put((t, d)), cancel_event=cancel)
             if result.get("cancelled"):
                 log.info("Analysis cancelled after the client disconnected: %r", query[:80])
+                if created_session:
+                    memory.delete_if_empty(session_id)
             else:
-                events.put(("done", {"result": _public_result(result), "usage": usage_snapshot()}))
+                briefing = memory.append_briefing(session_id, memory.briefing_record(query, depth, result))
+                events.put(("done", {
+                    "result": _public_result(result),
+                    "usage": usage_snapshot(),
+                    "session_id": session_id,
+                    "briefing_id": briefing["id"],
+                    "session": memory.summarize(memory.get_session(session_id)),
+                }))
         except Exception as e:
+            if created_session:
+                memory.delete_if_empty(session_id)
             events.put(("error", {"message": f"Analysis failed: {e}"}))
         finally:
             # The slot is held until the pipeline itself ends, even if the client left.
