@@ -1,5 +1,6 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Literal
 from pydantic import BaseModel
 import config
 from llm import generate, extract_json_from_response
@@ -20,6 +21,11 @@ TIMEOUT_SECONDS = 300  # 5-minute hard timeout
 MAX_AGENTS = 12
 MAX_WORKERS = 6
 MAX_ANALYSES_CHARS = 60000
+
+
+class Verdict(BaseModel):
+    status: Literal["APPROVED", "REJECTED"]
+    reason: str
 
 
 class Task(BaseModel):
@@ -146,18 +152,15 @@ def synthesize_report(analyses, user_query):
 
 
 def audit_report(report, user_query):
-    """Phase 4: Auditor validates the final report."""
-    prompt = (
-        "Review report quality. Output STATUS: APPROVED or STATUS: REJECTED.\n\n"
-        + AUDITOR_PROMPT.format(query=user_query, report=report)
-    )
+    """Phase 4: Auditor validates the final report. Returns 'STATUS: X — reason'."""
+    prompt = AUDITOR_PROMPT.format(query=user_query, report=report)
     try:
-        result = generate(prompt, max_tokens=256, thinking="minimal").text
-        if result:
-            return result
+        verdict = generate(prompt, max_tokens=512, schema=Verdict, thinking="minimal").parsed
+        if verdict:
+            return f"STATUS: {verdict.status} — {verdict.reason}"
     except Exception:
         pass
-    return "STATUS: APPROVED (audit fallback)"
+    return "STATUS: UNVERIFIED — auditor unavailable"
 
 
 def run_bifas_pipeline(user_query, depth="Standard"):

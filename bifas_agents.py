@@ -59,14 +59,15 @@ Output the final report in clean markdown format. Ensure the report is COMPLETE.
 Do NOT stop mid-generation. Finish all sections completely.
 """
 
-AUDITOR_PROMPT = """Review the BIFAS report quality.
+AUDITOR_PROMPT = """You are the BIFAS Report Auditor.
 
 Query: {query}
 
-Report: {report}
+Report:
+{report}
 
 Does the report comprehensively answer the user's query using the market data available?
-Output exactly: STATUS: APPROVED or STATUS: REJECTED with one sentence reason.
+Return status APPROVED or REJECTED, and a one-sentence reason.
 Note: Some on-chain data may only be available for Bitcoin. Do not penalize the report for missing data on non-BTC assets that is unavailable from public APIs."""
 
 DEPTH_CONFIG = {
