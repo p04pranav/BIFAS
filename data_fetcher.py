@@ -1,5 +1,6 @@
 import re
 import time
+from functools import lru_cache
 import pandas as pd
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,11 +20,11 @@ import requests
 
 DOMAIN_KEYWORDS = {
     "stocks": [
-        "stock", "equity", "share", "ticker", "p/e", "earnings", "dividend",
+        "stock", "equity", "equities", "share", "ticker", "p/e", "earnings", "dividend",
         "valuation", "market cap", "eps", "peg", "52-week",
         "nvda", "nvidia", "aapl", "apple", "msft", "microsoft",
         "googl", "google", "amzn", "amazon", "meta", "tesla", "tsla",
-        "jpm", "jpmorgan", "v", "visa", "wmt", "walmart", "unh",
+        "jpm", "jpmorgan", "visa", "wmt", "walmart", "unh",
         "spy", "qqq", "dia", "index", "s&p", "nasdaq", "dow"
     ],
     "crypto": [
@@ -35,7 +36,7 @@ DOMAIN_KEYWORDS = {
     ],
     "forex": [
         "forex", "eur/usd", "gbp/usd", "usd/jpy", "usd/chf", "aud/usd",
-        "nzd/usd", "usd/cad", "currency", "exchange rate", "fx", "pip",
+        "nzd/usd", "usd/cad", "currency", "currencies", "exchange rate", "fx", "pip",
         "dollar", "euro", "pound", "yen", "franc", "aussie", "kiwi",
         "loonie", "gbp", "eur", "jpy", "chf", "aud", "nzd", "cad",
         "interest rate", "central bank", "fed", "ecb", "boj", "boe"
@@ -59,6 +60,7 @@ TICKER_MAP = {
     "visa": "V", "walmart": "WMT", "wmt": "WMT",
     "unitedhealth": "UNH", "unh": "UNH",
     "spy": "SPY", "qqq": "QQQ",
+    "s&p 500": "SPY", "s&p": "SPY",
 }
 
 CRYPTO_MAP = {
@@ -104,12 +106,32 @@ COMMODITY_YF_MAP = {
 }
 
 
+# Uppercase words that look like tickers but are not stocks.
+TICKER_STOPWORDS = {
+    "THE", "AND", "FOR", "WITH", "FROM", "VS", "OR", "IS", "IT", "IN", "ON", "OF", "TO",
+    "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD", "CNY", "INR",
+    "GDP", "CPI", "PPI", "PMI", "FED", "ECB", "BOJ", "BOE", "FOMC", "IMF",
+    "CEO", "CFO", "ETF", "IPO", "AI", "API", "EPS", "PEG", "RSI", "MACD", "SMA",
+    "EMA", "ROI", "ROE", "YOY", "QOQ", "ATH", "MVRV", "NVT", "OHLCV", "USA", "US", "UK", "EU",
+}
+
+
+@lru_cache(maxsize=None)
+def _term_pattern(term):
+    """Match a term as a whole word (optional plural 's'), even if it contains '/', '&' or '='."""
+    return re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"s?(?![a-z0-9])")
+
+
+def _has_term(text_lower, term):
+    return _term_pattern(term).search(text_lower) is not None
+
+
 def detect_domains(query):
     q = query.lower()
     detected = []
     scores = {}
     for domain, keywords in DOMAIN_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in q)
+        score = sum(1 for kw in keywords if _has_term(q, kw))
         if score > 0:
             scores[domain] = score
     if scores:
@@ -124,21 +146,26 @@ def detect_domains(query):
 def extract_tickers(query, domains):
     q = query.lower()
     tickers = {}
-    if "stocks" in domains or "commodities" in domains:
+    if "stocks" in domains:
         stocks = []
         for name, symbol in TICKER_MAP.items():
-            if name in q:
+            if _has_term(q, name):
                 stocks.append(symbol)
-        mentioned_caps = re.findall(r'\b([A-Z]{2,5})\b', query)
+        non_stock_symbols = {k.upper() for k in list(CRYPTO_MAP) + list(COMMODITY_YF_MAP)}
+        mentioned_caps = re.findall(r'\b([A-Z]{1,5})\b', query)
         for t in mentioned_caps:
-            if t not in stocks and t not in ("THE", "AND", "FOR", "WITH", "FROM"):
-                stocks.append(t)
+            if t in stocks or t in TICKER_STOPWORDS or t in non_stock_symbols:
+                continue
+            # Single letters are only tickers when they are known ones (e.g. V for Visa).
+            if len(t) == 1 and t not in TICKER_MAP.values():
+                continue
+            stocks.append(t)
         if stocks:
             tickers["stocks"] = list(dict.fromkeys(stocks))
     if "crypto" in domains:
         cryptos = []
         for name, cg_id in CRYPTO_MAP.items():
-            if name in q:
+            if _has_term(q, name):
                 cryptos.append(cg_id)
         if not cryptos:
             cryptos = ["bitcoin", "ethereum"]
@@ -146,7 +173,7 @@ def extract_tickers(query, domains):
     if "forex" in domains:
         pairs = []
         for name, yf_sym in FOREX_YF_MAP.items():
-            if name in q:
+            if _has_term(q, name):
                 pairs.append(yf_sym)
         if not pairs:
             pairs = ["EURUSD=X", "GBPUSD=X", "JPY=X"]
@@ -154,7 +181,7 @@ def extract_tickers(query, domains):
     if "commodities" in domains:
         commodities = []
         for name, yf_sym in COMMODITY_YF_MAP.items():
-            if name in q:
+            if _has_term(q, name):
                 commodities.append(yf_sym)
         if not commodities:
             commodities = ["GC=F", "CL=F"]
