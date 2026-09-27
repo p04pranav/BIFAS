@@ -9,7 +9,8 @@ from bifas_agents import (
     AGENT_TASK_PROMPT,
     ORCHESTRATOR_SYNTHESIS_PROMPT,
     AUDITOR_PROMPT,
-    DEPTH_CONFIG
+    DEPTH_CONFIG,
+    SESSION_CONTEXT_BLOCK,
 )
 from data_fetcher import (
     detect_domains, extract_tickers, fetch_all_data,
@@ -96,12 +97,17 @@ class DynamicAgentSquad:
         return [{"name": k, "prompt": v["prompt"]} for k, v in self.agents.items()]
 
 
-def generate_tasks(user_query, max_agents):
+def _with_context(prompt, session_context):
+    return prompt + SESSION_CONTEXT_BLOCK.format(context=session_context) if session_context else prompt
+
+
+def generate_tasks(user_query, max_agents, session_context=""):
     """Phase 1: Orchestrator decomposes query into micro-tasks. Returns (tasks, LLMResult)."""
     prompt = (
         ORCHESTRATOR_DECOMPOSITION_PROMPT.format(max_agents=max_agents)
         + f"\n\nDecompose this query into {max_agents} independent micro-tasks:\n\n{user_query}"
     )
+    prompt = _with_context(prompt, session_context)
     for attempt in range(2):
         response = generate(prompt, max_tokens=4096, schema=list[Task], thinking="low")
         tasks = response.parsed
@@ -123,13 +129,13 @@ def generate_tasks(user_query, max_agents):
     return valid_tasks, response
 
 
-def execute_agent_task(agent_name, task, query, market_data="No specific data available."):
+def execute_agent_task(agent_name, task, query, market_data="No specific data available.", session_context=""):
     """Phase 2: Single agent executes one task with market data context.
 
     Returns (name, result, success, model)."""
-    prompt = AGENT_TASK_PROMPT.format(
+    prompt = _with_context(AGENT_TASK_PROMPT.format(
         name=agent_name, task=task, query=query, market_data=market_data
-    ) + "\n\nProvide your analysis now."
+    ), session_context) + "\n\nProvide your analysis now."
     try:
         response = generate(prompt, max_tokens=2048, thinking="low")
         if response.text:
@@ -139,14 +145,14 @@ def execute_agent_task(agent_name, task, query, market_data="No specific data av
     return (agent_name, "[AGENT FAILED]", False, None)
 
 
-def synthesize_report(analyses, user_query):
+def synthesize_report(analyses, user_query, session_context=""):
     """Phase 3: Orchestrator synthesizes all analyses into final report."""
     analyses_text = "\n\n".join([
         f"### {name}:\n{result}" for name, result in analyses.items()
     ])
-    prompt = ORCHESTRATOR_SYNTHESIS_PROMPT.format(
+    prompt = _with_context(ORCHESTRATOR_SYNTHESIS_PROMPT.format(
         analyses=analyses_text[:MAX_ANALYSES_CHARS], query=user_query
-    ) + (
+    ), session_context) + (
         "\n\nGenerate the final BIFAS report in markdown."
         "\nCRITICAL: Complete the entire report fully without stopping mid-sentence."
     )
@@ -208,7 +214,8 @@ def _event_emitter(on_event):
     return emit
 
 
-def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event=None):
+def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event=None,
+                       session_context="", fallback_assets=None):
     """
     Sprint-based pipeline with parallel execution.
     Hard 5-minute timeout. Agent count controls depth.
@@ -218,6 +225,11 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
     agent(name, status, text, model), report(markdown), audit(status),
     and cancelled() if cancel_event (a threading.Event) is set mid-run. A cancelled
     run stops before its next model call and returns with result["cancelled"] = True.
+
+    session_context: a recap of earlier briefings in the session, added to the
+    decomposition, analyst and synthesis prompts so follow-up questions make sense.
+    fallback_assets: {"domains", "tickers"} to analyze when the question names no
+    specific assets (e.g. the previous briefing's), instead of generic defaults.
     """
     emit = _event_emitter(on_event)
     start_time = time.time()
@@ -236,6 +248,8 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
         "fallback_used": False,
         "market_snapshot": [],
         "cancelled": False,
+        "used_context": bool(session_context),
+        "carried_over": False,
     }
     models = set()
     guardrails = []
@@ -245,12 +259,17 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
         # PHASE 0: Domain Detection + Data Pre-Fetch
         emit("phase", name="data")
         domains = detect_domains(user_query)
-        tickers_map = extract_tickers(user_query, domains)
+        if fallback_assets and not extract_tickers(user_query, domains, defaults=False):
+            domains = list(fallback_assets["domains"])
+            tickers_map = dict(fallback_assets["tickers"])
+            result["carried_over"] = True
+        else:
+            tickers_map = extract_tickers(user_query, domains)
         market_data = fetch_all_data(domains, tickers_map)
         result["data_sources"] = list(tickers_map.keys())
         result["domains"] = domains
         result["tickers"] = tickers_map
-        emit("data", domains=domains, tickers=tickers_map)
+        emit("data", domains=domains, tickers=tickers_map, carried_over=result["carried_over"])
         result["market_snapshot"] = market_snapshot(market_data, domains, tickers_map)
         emit("market", assets=result["market_snapshot"])
         _check_cancel(cancel_event)
@@ -258,7 +277,7 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
         # PHASE 1: Task Decomposition (1 call)
         emit("phase", name="decompose")
         decomposed = _run_before(deadline - FINISH_RESERVE_SECONDS, generate_tasks, user_query, max_agents,
-                                 cancel_event=cancel_event)
+                                 session_context, cancel_event=cancel_event)
         if decomposed is None:
             guardrails.append("Timeout during task decomposition")
             result["final_report"] = "No analysis completed before the time limit."
@@ -307,7 +326,8 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
 
         executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_WORKERS))
         future_to_task = {
-            executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query, t.get("market_data", "No specific data available.")): t
+            executor.submit(execute_agent_task, t["agent_name"], t["task"], user_query,
+                            t.get("market_data", "No specific data available."), session_context): t
             for t in tasks
         }
         pending = set(future_to_task)
@@ -336,7 +356,8 @@ def run_bifas_pipeline(user_query, depth="Standard", on_event=None, cancel_event
         if analyses:
             _check_cancel(cancel_event)
             emit("phase", name="synthesis")
-            final_report = _run_before(deadline, synthesize_report, analyses, user_query, cancel_event=cancel_event)
+            final_report = _run_before(deadline, synthesize_report, analyses, user_query, session_context,
+                                       cancel_event=cancel_event)
             if final_report is None:
                 guardrails.append("Timeout during synthesis — showing raw agent analyses")
                 final_report = "\n\n".join(f"### {name}\n{text}" for name, text in analyses.items())

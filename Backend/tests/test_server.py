@@ -217,3 +217,39 @@ def test_analyze_appends_to_existing_session(client, monkeypatch):
 def test_analyze_unknown_session_is_404(client):
     res = client.get("/api/analyze", params={"query": "NVDA", "depth": "Quick", "session": "20260101-000000-abcdef"})
     assert res.status_code == 404
+
+
+def test_follow_ups_get_context_and_carried_assets(client, monkeypatch):
+    calls = []
+
+    def recording_pipeline(query, depth, on_event=None, session_context="", fallback_assets=None, **kwargs):
+        calls.append({"query": query, "context": session_context, "fallback": fallback_assets})
+        result = fake_pipeline(query, depth, on_event)
+        result.update(tickers={"commodities": ["GC=F"]}, domains=["commodities"])
+        return result
+    monkeypatch.setattr(server, "run_bifas_pipeline", recording_pipeline)
+
+    first = parse_sse(client.get("/api/analyze", params={"query": "Gold outlook", "depth": "Quick"}).text)
+    sid = first[-1][1]["session_id"]
+    parse_sse(client.get("/api/analyze", params={"query": "What are the risks?", "depth": "Quick", "session": sid}).text)
+    parse_sse(client.get("/api/analyze", params={"query": "Fresh look", "depth": "Quick", "session": sid, "context": "0"}).text)
+
+    assert calls[0]["context"] == "" and calls[0]["fallback"] is None
+    assert "Gold outlook" in calls[1]["context"]
+    assert calls[1]["fallback"] == {"domains": ["commodities"], "tickers": {"commodities": ["GC=F"]}}
+    assert calls[2]["context"] == "" and calls[2]["fallback"] is None
+    used = [b["used_context"] for b in client.get(f"/api/sessions/{sid}").json()["briefings"]]
+    assert used == [False, True, False]
+
+
+def test_preview_in_a_session(client, monkeypatch):
+    monkeypatch.setattr(server, "run_bifas_pipeline",
+                        lambda q, d, on_event=None, **kw: {**fake_pipeline(q, d, on_event),
+                                                           "tickers": {"commodities": ["GC=F"]}, "domains": ["commodities"]})
+    sid = parse_sse(client.get("/api/analyze", params={"query": "Gold", "depth": "Quick"}).text)[-1][1]["session_id"]
+    carried = client.get("/api/preview", params={"query": "What are the risks?", "session": sid}).json()
+    assert carried["carried_over"] is True and carried["tickers"] == {"commodities": ["GC=F"]}
+    assert carried["context_briefings"] == 1
+    fresh = client.get("/api/preview", params={"query": "And NVDA?", "session": sid}).json()
+    assert fresh["carried_over"] is False and fresh["named"] == {"stocks": ["NVDA"]}
+    assert client.get("/api/preview", params={"query": "x", "session": "20260101-000000-abcdef"}).status_code == 404

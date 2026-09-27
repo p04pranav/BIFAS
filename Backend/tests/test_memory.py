@@ -101,3 +101,37 @@ def test_briefing_record_from_pipeline_result():
         {"name": "Oil", "task": "t2", "status": "not finished", "text": ""},
     ]
     assert rec["used_context"] is True and rec["tickers"] == {"commodities": ["GC=F"]}
+
+
+def _briefing(query, report, tickers=None, verdict="STATUS: APPROVED — ok"):
+    return {"query": query, "final_report": report, "audit_status": verdict,
+            "tickers": tickers or {}, "domains": list(tickers or {})}
+
+
+def test_build_context_uses_last_three_summaries():
+    s = memory.create_session()
+    for i in range(5):
+        memory.append_briefing(s["id"], _briefing(
+            f"Question {i}", f"# Title\n\n## Executive Summary\n**Point {i}** holds.\n\n## Key Findings\n- detail {i}"))
+    context = memory.build_context(memory.get_session(s["id"]))
+    assert "Question 0" not in context and "Question 1" not in context
+    for i in (2, 3, 4):
+        assert f"Question {i}" in context and f"Point {i} holds." in context
+    assert "detail" not in context and "**" not in context
+    assert memory.build_context({"briefings": []}) == ""
+
+
+def test_build_context_is_capped():
+    s = memory.create_session()
+    for i in range(3):
+        memory.append_briefing(s["id"], _briefing(f"Q{i}", "## Executive Summary\n" + "word " * 500))
+    context = memory.build_context(memory.get_session(s["id"]))
+    assert len(context) <= memory.CONTEXT_TOTAL_CHARS
+    assert all(len(line) <= memory.CONTEXT_SUMMARY_CHARS + 20 for line in context.splitlines())
+
+
+def test_last_assets():
+    s = memory.create_session()
+    assert memory.last_assets(memory.get_session(s["id"])) is None
+    memory.append_briefing(s["id"], _briefing("Gold?", "r", {"commodities": ["GC=F"]}))
+    assert memory.last_assets(memory.get_session(s["id"])) == {"domains": ["commodities"], "tickers": {"commodities": ["GC=F"]}}

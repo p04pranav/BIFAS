@@ -75,19 +75,28 @@ def estimate_requests(depth):
 
 
 @app.get("/api/preview")
-def preview(query: str = Query("", max_length=MAX_QUERY_CHARS)):
-    """What a question would analyze and cost, using only local keyword matching (no AI or network)."""
+def preview(
+    query: str = Query("", max_length=MAX_QUERY_CHARS),
+    session: Optional[str] = Query(None),
+):
+    """What a question would analyze and cost, using only local keyword matching (no AI or network).
+
+    With a session: how many earlier briefings a follow-up builds on, and whether it
+    continues with the previous briefing's assets because it names none of its own."""
     query = query.strip()
     estimates = {name: estimate_requests(name) for name in DEPTH_CONFIG}
+    session_data = _session_or_404(session) if session else None
+    context_briefings = min(len(session_data["briefings"]), memory.CONTEXT_BRIEFINGS) if session_data else 0
+    body = {"domains": [], "tickers": {}, "named": {}, "carried_over": False,
+            "context_briefings": context_briefings, "estimates": estimates}
     if not query:
-        return {"domains": [], "tickers": {}, "named": {}, "estimates": estimates}
+        return body
     domains = detect_domains(query)
-    return {
-        "domains": domains,
-        "tickers": extract_tickers(query, domains),
-        "named": extract_tickers(query, domains, defaults=False),
-        "estimates": estimates,
-    }
+    named = extract_tickers(query, domains, defaults=False)
+    carry = memory.last_assets(session_data) if session_data and not named else None
+    body.update(named=named, domains=carry["domains"] if carry else domains,
+                tickers=carry["tickers"] if carry else extract_tickers(query, domains), carried_over=bool(carry))
+    return body
 
 
 class SessionCreate(BaseModel):
@@ -167,6 +176,7 @@ def analyze(
     query: str = Query(..., max_length=MAX_QUERY_CHARS),
     depth: str = Query("Standard"),
     session: Optional[str] = Query(None),
+    context: bool = Query(True),
 ):
     """Run the pipeline and stream its progress as Server-Sent Events.
 
@@ -181,9 +191,13 @@ def analyze(
         raise HTTPException(422, "Enter a query to analyze.")
     if depth not in DEPTH_CONFIG:
         raise HTTPException(422, f"Depth must be one of: {', '.join(DEPTH_CONFIG)}.")
+    session_context, fallback_assets = "", None
     if session is not None:
         session_data = _session_or_404(session)
         created_session = False
+        if context:
+            session_context = memory.build_context(session_data)
+            fallback_assets = memory.last_assets(session_data)
     if not _run_slots.acquire(blocking=False):
         raise HTTPException(429, "Too many analyses are running. Try again in a minute.")
     if session is None:
@@ -197,13 +211,17 @@ def analyze(
 
     def worker():
         try:
-            result = run_bifas_pipeline(query, depth, on_event=lambda t, d: events.put((t, d)), cancel_event=cancel)
+            result = run_bifas_pipeline(
+                query, depth, on_event=lambda t, d: events.put((t, d)), cancel_event=cancel,
+                session_context=session_context, fallback_assets=fallback_assets,
+            )
             if result.get("cancelled"):
                 log.info("Analysis cancelled after the client disconnected: %r", query[:80])
                 if created_session:
                     memory.delete_if_empty(session_id)
             else:
-                briefing = memory.append_briefing(session_id, memory.briefing_record(query, depth, result))
+                briefing = memory.append_briefing(
+                    session_id, memory.briefing_record(query, depth, result, used_context=bool(session_context)))
                 events.put(("done", {
                     "result": _public_result(result),
                     "usage": usage_snapshot(),

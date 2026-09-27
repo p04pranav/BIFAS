@@ -75,3 +75,11 @@ DEPTH_CONFIG = {
     "Standard": {"max_agents": 6, "description": "Balanced analysis, 6 agents, ~35s"},
     "Deep": {"max_agents": 12, "description": "Thorough analysis, 12 agents, ~60s"}
 }
+
+SESSION_CONTEXT_BLOCK = """
+
+Earlier in this session (the user's previous questions and briefing summaries):
+{context}
+
+Use this only for continuity, e.g. to understand follow-up wording such as "instead", "what about" or "compared with that".
+Take every price and metric from the CURRENT market data, never from the earlier summaries, which may be out of date."""

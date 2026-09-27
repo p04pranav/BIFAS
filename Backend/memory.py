@@ -211,6 +211,43 @@ def _prune():
             pass
 
 
+CONTEXT_BRIEFINGS = 3
+CONTEXT_SUMMARY_CHARS = 600
+CONTEXT_TOTAL_CHARS = 2000
+
+
+def _summary_section(report):
+    """The report's executive summary (or its opening) as plain text."""
+    text = report or ""
+    match = re.search(r"^#+\s*executive summary\s*$(.*?)(?=^#+\s|\Z)", text, re.I | re.M | re.S)
+    body = match.group(1) if match else re.sub(r"^#.*$", "", text, flags=re.M)
+    body = re.sub(r"[*_`>#]", "", body)
+    return " ".join(body.split())
+
+
+def build_context(session):
+    """A short recap of the session's recent briefings for follow-up questions ('' if none)."""
+    parts = []
+    for b in session.get("briefings", [])[-CONTEXT_BRIEFINGS:]:
+        summary = _summary_section(b.get("final_report"))
+        if len(summary) > CONTEXT_SUMMARY_CHARS:
+            summary = summary[:CONTEXT_SUMMARY_CHARS - 1].rstrip() + "…"
+        parts.append(f"- Question: {b.get('query', '')}\n  Verdict: {_verdict(b.get('audit_status'))}\n  Summary: {summary}")
+    context = "\n".join(parts)
+    return context[-CONTEXT_TOTAL_CHARS:] if len(context) > CONTEXT_TOTAL_CHARS else context
+
+
+def last_assets(session):
+    """Domains and tickers of the session's latest briefing, to continue with when a follow-up names none."""
+    briefings = session.get("briefings", [])
+    if not briefings:
+        return None
+    last = briefings[-1]
+    if not last.get("tickers"):
+        return None
+    return {"domains": last.get("domains") or list(last["tickers"]), "tickers": last["tickers"]}
+
+
 def briefing_record(query, depth, result, used_context=False):
     """What to store for a finished pipeline run."""
     texts = {r["next_agent"]: r.get("contribution_full") or r.get("contribution", "") for r in result.get("rounds", [])}

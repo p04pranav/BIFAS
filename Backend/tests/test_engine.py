@@ -169,3 +169,42 @@ def test_cancel_before_start_makes_no_model_calls(monkeypatch):
     cancel.set()
     result = engine.run_bifas_pipeline("Analyze NVDA", depth="Quick", cancel_event=cancel)
     assert result["cancelled"] is True and result["guardrail_triggered"] == "Cancelled"
+
+
+def test_session_context_reaches_every_prompt_but_the_audit(monkeypatch):
+    monkeypatch.setattr(engine, "fetch_all_data", lambda domains, tickers: {})
+    prompts = {}
+
+    def recording_generate(prompt, *, max_tokens, schema=None, thinking="low"):
+        if schema is engine.Verdict:
+            prompts["audit"] = prompt
+            return _result(parsed=engine.Verdict(status="APPROVED", reason="ok"))
+        if schema is not None:
+            prompts["decompose"] = prompt
+            return _result(parsed=[engine.Task(agent_name="Silver", task="t", domain="commodities")])
+        if "BIFAS Report Synthesizer" in prompt:
+            prompts["synthesis"] = prompt
+            return _result(text="# Report")
+        prompts["agent"] = prompt
+        return _result(text="analysis")
+    monkeypatch.setattr(engine, "generate", recording_generate)
+    recap = "- Question: Gold vs dollar\n  Verdict: approved\n  Summary: Gold rose."
+    result = engine.run_bifas_pipeline("What about silver instead?", depth="Quick", session_context=recap)
+    for phase in ("decompose", "agent", "synthesis"):
+        assert "Earlier in this session" in prompts[phase] and "Gold rose." in prompts[phase], phase
+    assert "Earlier in this session" not in prompts["audit"]
+    assert prompts["agent"].rstrip().endswith("Provide your analysis now.")
+    assert result["used_context"] is True
+
+
+def test_follow_up_without_assets_continues_with_previous_ones(offline_pipeline, monkeypatch):
+    offline_pipeline(agent_names=["A"])
+    fetched = {}
+    monkeypatch.setattr(engine, "fetch_all_data", lambda domains, tickers: fetched.update(domains=domains, tickers=tickers) or {})
+    previous = {"domains": ["commodities", "forex"], "tickers": {"commodities": ["GC=F", "CL=F"]}}
+    result = engine.run_bifas_pipeline("What are the main risks?", depth="Quick", fallback_assets=previous)
+    assert fetched == {"domains": ["commodities", "forex"], "tickers": {"commodities": ["GC=F", "CL=F"]}}
+    assert result["carried_over"] is True
+
+    result = engine.run_bifas_pipeline("What about silver instead?", depth="Quick", fallback_assets=previous)
+    assert fetched["tickers"]["commodities"] == ["SI=F"] and result["carried_over"] is False
