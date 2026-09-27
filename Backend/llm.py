@@ -25,7 +25,8 @@ from config import client
 
 # Free-tier daily quotas reset at midnight Pacific time.
 QUOTA_TZ = ZoneInfo("America/Los_Angeles")
-USAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bifas_usage.json")
+USAGE_FILE = str(config.MEMORY_DIR / "usage.json")
+LEGACY_USAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bifas_usage.json")
 
 SERVER_RETRY_DELAYS = (2, 6)
 FALLBACK_EXTRA_TOKENS = 2048  # the fallback thinks without a controllable budget
@@ -74,8 +75,11 @@ class DailyCounter:
 
     def _save(self):
         try:
-            with open(self.path, "w") as f:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w") as f:
                 json.dump({"day": self.day, "count": self.count}, f)
+            os.replace(tmp, self.path)
         except OSError:
             pass
 
@@ -113,6 +117,22 @@ class LLMResult:
     finish_reason: Optional[str]
     fallback: bool
 
+
+def migrate_legacy_usage(legacy=LEGACY_USAGE_FILE, target=USAGE_FILE):
+    """Move the pre-Memory/ usage file (Backend/.bifas_usage.json) into Memory/ once."""
+    if not os.path.exists(legacy):
+        return
+    try:
+        if not os.path.exists(target):
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.replace(legacy, target)
+        else:
+            os.remove(legacy)
+    except OSError:
+        pass
+
+
+migrate_legacy_usage()
 
 _limiters = {}
 _limiters_lock = Lock()

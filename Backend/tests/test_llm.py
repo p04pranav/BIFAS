@@ -1,3 +1,4 @@
+import json
 import time
 from types import SimpleNamespace
 
@@ -147,3 +148,26 @@ def test_rate_limiter_spaces_calls(monkeypatch):
 ])
 def test_extract_json_from_response(raw, expected):
     assert llm.extract_json_from_response(raw) == expected
+
+
+def test_usage_file_lives_in_memory_dir():
+    import config
+    assert llm.USAGE_FILE == str(config.MEMORY_DIR / "usage.json")
+
+
+def test_daily_counter_creates_missing_folder(tmp_path):
+    path = tmp_path / "Memory" / "usage.json"
+    counter = llm.DailyCounter(5, str(path))
+    assert counter.try_acquire()
+    assert json.loads(path.read_text())["count"] == 1
+
+
+def test_legacy_usage_file_is_migrated_once(tmp_path):
+    legacy, target = tmp_path / ".bifas_usage.json", tmp_path / "Memory" / "usage.json"
+    legacy.write_text('{"day": "2026-09-27", "count": 42}')
+    llm.migrate_legacy_usage(str(legacy), str(target))
+    assert not legacy.exists() and json.loads(target.read_text())["count"] == 42
+    # A second stray legacy file never overwrites the newer Memory/ copy.
+    legacy.write_text('{"day": "2026-09-27", "count": 1}')
+    llm.migrate_legacy_usage(str(legacy), str(target))
+    assert not legacy.exists() and json.loads(target.read_text())["count"] == 42

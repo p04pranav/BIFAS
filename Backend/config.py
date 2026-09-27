@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 import google.genai as genai
 from google.genai import types
@@ -17,6 +19,9 @@ PRIMARY_MODEL = os.getenv("BIFAS_MODEL", "gemini-3.5-flash-lite")
 FALLBACK_MODEL = os.getenv("BIFAS_FALLBACK_MODEL", "gemma-4-26b-a4b-it")
 REQUESTS_PER_MINUTE = int(os.getenv("BIFAS_RPM", "15"))
 DAILY_REQUEST_LIMIT = int(os.getenv("BIFAS_DAILY_LIMIT", "500"))
+
+# Local persistence (sessions, briefings, usage) lives in <repo>/Memory as JSON files.
+MEMORY_DIR = Path(os.getenv("BIFAS_MEMORY_DIR") or Path(__file__).resolve().parent.parent / "Memory")
 
 # Per-request HTTP timeout so one hung call cannot stall the pipeline.
 REQUEST_TIMEOUT_MS = int(os.getenv("BIFAS_REQUEST_TIMEOUT_MS", "90000"))
