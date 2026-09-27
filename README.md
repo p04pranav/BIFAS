@@ -292,7 +292,6 @@ BIFAS/
 │   └── app.js                 # Streams progress from the API and renders the briefing
 ├── docs/screenshot.png
 ├── TEST_REPORT.md             # Test results (v7.0 + historical v5/v6)
-├── RAW_TEST_OUTPUT.md         # Full raw test output (v5 runs)
 └── README.md
 ```
 
@@ -429,7 +428,7 @@ pytest -q
 
 ### v5.0 (Sprint + Live Data) — 9/9 PASSED
 
-All 9 test configurations (3 domains × 3 depths) passed with live data using MiMo-V2.5, the model BIFAS used at the time (see [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md)).
+All 9 test configurations (3 domains × 3 depths) passed with live data using MiMo-V2.5, the model BIFAS used at the time.
 
 | # | Domain | Depth | Agents | Time | Audit |
 |---|--------|-------|--------|------|-------|
@@ -454,7 +453,7 @@ All 9 test configurations (3 domains × 3 depths) passed with live data using Mi
 | Commodities | ❌ Hallucinated | ✅ Real prices |
 | **API Cost** | — | **\$0 (free tier)** |
 
-See [TEST_REPORT.md](TEST_REPORT.md) and [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md) for full details.
+See [TEST_REPORT.md](TEST_REPORT.md) for full details.
 
 ---
 
