@@ -291,7 +291,7 @@ BIFAS/
 │   ├── styles.css             # Dark theme, desktop/laptop layout
 │   └── app.js                 # Streams progress from the API and renders the briefing
 ├── docs/screenshot.png
-├── TEST_REPORT.md             # Test results (v7.0 + historical v5/v6)
+├── TEST_REPORT.md             # Test results (v7.1, v7.0 + historical v5)
 └── README.md
 ```
 
