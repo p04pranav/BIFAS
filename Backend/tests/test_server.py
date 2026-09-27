@@ -108,7 +108,7 @@ def test_frontend_is_served(client):
         pytest.skip("Frontend/ not present")
     res = client.get("/")
     assert res.status_code == 200 and "BIFAS" in res.text
-    assert client.get("/app.js").status_code == 200
+    assert client.get("/js/main.js").status_code == 200
 
 
 def test_preview_reports_assets_and_costs(client):
