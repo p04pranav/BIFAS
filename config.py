@@ -14,7 +14,7 @@ if not GOOGLE_API_KEY:
 
 # Primary model and its free-tier limits; the fallback has its own separate quota.
 PRIMARY_MODEL = os.getenv("BIFAS_MODEL", "gemini-3.5-flash-lite")
-FALLBACK_MODEL = os.getenv("BIFAS_FALLBACK_MODEL", "gemma-4-31b-it")
+FALLBACK_MODEL = os.getenv("BIFAS_FALLBACK_MODEL", "gemma-4-26b-a4b-it")
 REQUESTS_PER_MINUTE = int(os.getenv("BIFAS_RPM", "15"))
 DAILY_REQUEST_LIMIT = int(os.getenv("BIFAS_DAILY_LIMIT", "500"))
 
