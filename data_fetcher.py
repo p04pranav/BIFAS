@@ -227,6 +227,12 @@ def fetch_stock_data(ticker):
         return {"ticker": ticker, "error": str(e)}
 
 
+def _last_by_prefix(df, prefix):
+    """Latest value of the pandas-ta output column whose name starts with prefix."""
+    col = next(c for c in df.columns if c.startswith(prefix))
+    return df[col].iloc[-1]
+
+
 def compute_technicals(hist_df):
     if hist_df is None or hist_df.empty or ta is None:
         return {}
@@ -242,13 +248,13 @@ def compute_technicals(hist_df):
             "sma_50": round(float(sma_50.iloc[-1]), 2) if sma_50 is not None and len(sma_50) > 0 else None,
         }
         if macd_result is not None and len(macd_result) > 0:
-            result["macd"] = round(float(macd_result.iloc[-1, 0]), 4)
-            result["macd_signal"] = round(float(macd_result.iloc[-1, 1]), 4)
-            result["macd_hist"] = round(float(macd_result.iloc[-1, 2]), 4)
+            result["macd"] = round(float(_last_by_prefix(macd_result, "MACD_")), 4)
+            result["macd_signal"] = round(float(_last_by_prefix(macd_result, "MACDs_")), 4)
+            result["macd_hist"] = round(float(_last_by_prefix(macd_result, "MACDh_")), 4)
         if bb_result is not None and len(bb_result) > 0:
-            result["bb_upper"] = round(float(bb_result.iloc[-1, 0]), 2)
-            result["bb_mid"] = round(float(bb_result.iloc[-1, 1]), 2)
-            result["bb_lower"] = round(float(bb_result.iloc[-1, 2]), 2)
+            result["bb_upper"] = round(float(_last_by_prefix(bb_result, "BBU_")), 2)
+            result["bb_mid"] = round(float(_last_by_prefix(bb_result, "BBM_")), 2)
+            result["bb_lower"] = round(float(_last_by_prefix(bb_result, "BBL_")), 2)
         if sma_200 is not None and len(sma_200) > 0 and not pd.isna(sma_200.iloc[-1]):
             result["sma_200"] = round(float(sma_200.iloc[-1]), 2)
         return result
