@@ -179,11 +179,28 @@ def _run_before(deadline, fn, *args):
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-def run_bifas_pipeline(user_query, depth="Standard"):
+def _event_emitter(on_event):
+    """Wrap an optional progress callback so a failing listener never breaks a run."""
+    def emit(event_type, **data):
+        if on_event is None:
+            return
+        try:
+            on_event(event_type, data)
+        except Exception:
+            pass
+    return emit
+
+
+def run_bifas_pipeline(user_query, depth="Standard", on_event=None):
     """
     Sprint-based pipeline with parallel execution.
     Hard 5-minute timeout. Agent count controls depth.
+
+    on_event(type, data) is called as the run progresses:
+    phase(name) when a phase starts, data(domains, tickers), tasks(agents),
+    agent(name, status, text, model), report(markdown), audit(status).
     """
+    emit = _event_emitter(on_event)
     start_time = time.time()
     max_agents = DEPTH_CONFIG[depth]["max_agents"]
 
@@ -205,12 +222,15 @@ def run_bifas_pipeline(user_query, depth="Standard"):
 
     try:
         # PHASE 0: Domain Detection + Data Pre-Fetch
+        emit("phase", name="data")
         domains = detect_domains(user_query)
         tickers_map = extract_tickers(user_query, domains)
         market_data = fetch_all_data(domains, tickers_map)
         result["data_sources"] = list(tickers_map.keys())
+        emit("data", domains=domains, tickers=tickers_map)
 
         # PHASE 1: Task Decomposition (1 call)
+        emit("phase", name="decompose")
         decomposed = _run_before(deadline - FINISH_RESERVE_SECONDS, generate_tasks, user_query, max_agents)
         if decomposed is None:
             guardrails.append("Timeout during task decomposition")
@@ -221,6 +241,7 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         models.add(decomposition.model)
         result["tasks"] = tasks
         result["agent_squad"] = [{"name": t["agent_name"], "prompt": t["task"]} for t in tasks]
+        emit("tasks", agents=[{"name": t["agent_name"], "task": t["task"], "domain": t.get("domain")} for t in tasks])
 
         # Inject per-ticker market data into each task
         for task in tasks:
@@ -237,6 +258,7 @@ def run_bifas_pipeline(user_query, depth="Standard"):
         analyses = {}
         failed_agents = []
         agent_deadline = deadline - FINISH_RESERVE_SECONDS
+        emit("phase", name="agents")
 
         executor = ThreadPoolExecutor(max_workers=min(len(tasks), MAX_WORKERS))
         future_to_task = {
@@ -256,12 +278,16 @@ def run_bifas_pipeline(user_query, depth="Standard"):
                         "contribution": result_text[:300],
                         "contribution_full": result_text,
                     })
+                    emit("agent", name=agent_name, status="done", text=result_text, model=model)
                 else:
                     failed_agents.append(agent_name)
+                    emit("agent", name=agent_name, status="failed", text="", model=None)
                     band.send_message(room_id, agent_name, "[FAILED]", msg_type="request")
         except FuturesTimeout:
             unfinished = [t["agent_name"] for f, t in future_to_task.items() if not f.done()]
             guardrails.append(f"Timeout during agent execution — skipped: {', '.join(unfinished)}")
+            for name in unfinished:
+                emit("agent", name=name, status="skipped", text="", model=None)
         finally:
             # Never wait for stragglers: queued agents are cancelled, running ones are abandoned.
             executor.shutdown(wait=False, cancel_futures=True)
@@ -271,20 +297,24 @@ def run_bifas_pipeline(user_query, depth="Standard"):
 
         # PHASE 3: Synthesis (1 call)
         if analyses:
+            emit("phase", name="synthesis")
             final_report = _run_before(deadline, synthesize_report, analyses, user_query)
             if final_report is None:
                 guardrails.append("Timeout during synthesis — showing raw agent analyses")
                 final_report = "\n\n".join(f"### {name}\n{text}" for name, text in analyses.items())
                 result["audit_status"] = "Skipped - timeout"
             result["final_report"] = final_report
+            emit("report", markdown=final_report)
 
             # PHASE 4: Audit (1 call)
             if not result["audit_status"]:
+                emit("phase", name="audit")
                 audit = _run_before(deadline, audit_report, final_report, user_query)
                 if audit is None:
                     guardrails.append("Timeout during audit")
                     audit = "Skipped - timeout"
                 result["audit_status"] = audit
+            emit("audit", status=result["audit_status"])
         else:
             result["final_report"] = "No agent analyses completed."
             result["audit_status"] = "FAILED - no analyses"
