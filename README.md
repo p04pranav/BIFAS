@@ -7,11 +7,12 @@
 **Multi-agent financial intelligence with Sprint Architecture — live market data, parallel execution, zero cost.**
 
 ![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![Frontend](https://img.shields.io/badge/HTML_%2F_CSS_%2F_JS-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
 ![Gemini 3.5 Flash Lite](https://img.shields.io/badge/Gemini_3.5_Flash_Lite-4285F4?style=flat-square&logo=google&logoColor=white)
 ![License](https://img.shields.io/badge/License-Proprietary-red?style=flat-square)
 ![APIs](https://img.shields.io/badge/Data_Sources-7_Keyless_APIs-00C853?style=flat-square)
-![Tests](https://img.shields.io/badge/Tests-48_unit_%2B_6_live_passed-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-60_unit_%2B_6_live_passed-brightgreen?style=flat-square)
 ![Cost](https://img.shields.io/badge/Cost-%240-gold?style=flat-square)
 
 <br/>
@@ -175,13 +176,15 @@ flowchart LR
 
 ```mermaid
 graph TD
-    APP["🖥️ app.py<br/>Streamlit UI"]
+    UI["🖥️ Frontend/<br/>HTML · CSS · JS"]
+    APP["🌐 server.py<br/>FastAPI + SSE"]
     ENG["⚙️ engine.py<br/>Sprint Architecture"]
     AGT["🤖 bifas_agents.py<br/>Prompts + Config"]
     DAT["📡 data_fetcher.py<br/>7 API Integrations"]
     CFG["🔧 config.py<br/>Google AI Client"]
 
-    APP -->|"run_bifas_pipeline()"| ENG
+    UI -->|"GET /api/analyze (SSE)"| APP
+    APP -->|"run_bifas_pipeline(on_event)"| ENG
     APP -->|"DEPTH_CONFIG"| AGT
     ENG -->|"prompts"| AGT
     ENG -->|"fetch data"| DAT
@@ -196,6 +199,7 @@ graph TD
     CFG -.->|"google.genai"| GEMMA
     DAT -.->|"HTTP requests"| APIS
 
+    style UI fill:#2d1b69,stroke:#a78bfa,stroke-width:2px,color:#fff
     style APP fill:#2d1b69,stroke:#a78bfa,stroke-width:2px,color:#fff
     style ENG fill:#1a3c34,stroke:#34d399,stroke-width:2px,color:#fff
     style AGT fill:#3b2f1e,stroke:#fbbf24,stroke-width:1px,color:#fff
@@ -248,7 +252,8 @@ graph TD
 
 | Component | Technology |
 |-----------|------------|
-| **UI** | Streamlit |
+| **Frontend** | Vanilla HTML / CSS / JS (marked + DOMPurify for markdown) |
+| **API** | FastAPI + Server-Sent Events (uvicorn) |
 | **LLM** | Google **Gemini 3.5 Flash Lite** (free tier, \$0) · fallback **Gemma 4 26B A4B** |
 | **Stock/Forex/Commodity Data** | yfinance |
 | **Crypto OHLCV** | Kraken API |
@@ -262,7 +267,7 @@ graph TD
 | **Language** | Python 3.10+ |
 | **Config** | python-dotenv |
 | **Structured Output** | Pydantic schemas |
-| **Tests** | pytest (offline, mocked LLM) |
+| **Tests** | pytest (offline, mocked LLM, FastAPI TestClient) |
 
 ---
 
@@ -270,20 +275,25 @@ graph TD
 
 ```
 BIFAS/
-├── app.py                 # Streamlit UI — dark terminal aesthetic
-├── engine.py              # Sprint architecture — orchestration, parallel execution, synthesis
-├── llm.py                 # Model calls — rate/daily limits, retries, Gemma fallback, structured output
-├── bifas_agents.py        # Prompt templates + depth config (Quick/Standard/Deep)
-├── data_fetcher.py        # 7 API integrations, domain detection, ticker extraction, technicals
-├── config.py              # Google AI client, model names and limits from env
-├── requirements.txt       # Python dependencies
-├── requirements-dev.txt   # + pytest
-├── tests/                 # Offline pytest suite (no API calls)
-├── .env.example           # Environment variable template
-├── .gitignore             # Ignored files
-├── TEST_REPORT.md         # Test results (v7.0 + historical v5/v6)
-├── RAW_TEST_OUTPUT.md     # Full raw test output (9 runs)
-└── README.md              # This file
+├── Backend/                   # Python: pipeline + HTTP API
+│   ├── server.py              # FastAPI app — REST + live SSE stream, serves Frontend/
+│   ├── engine.py              # Sprint architecture — orchestration, parallel execution, synthesis
+│   ├── llm.py                 # Model calls — rate/daily limits, retries, Gemma fallback, structured output
+│   ├── bifas_agents.py        # Prompt templates + depth config (Quick/Standard/Deep)
+│   ├── data_fetcher.py        # API integrations, domain detection, ticker extraction, technicals
+│   ├── config.py              # Google AI client, model names and limits from env
+│   ├── tests/                 # Offline pytest suite (no API calls)
+│   ├── requirements.txt       # Python dependencies
+│   ├── requirements-dev.txt   # + pytest, httpx
+│   └── .env.example           # Environment variable template
+├── Frontend/                  # Static dashboard — no build step
+│   ├── index.html
+│   ├── styles.css             # Dark theme, desktop/laptop layout
+│   └── app.js                 # Streams progress from the API and renders the briefing
+├── docs/screenshot.png
+├── TEST_REPORT.md             # Test results (v7.0 + historical v5/v6)
+├── RAW_TEST_OUTPUT.md         # Full raw test output (v5 runs)
+└── README.md
 ```
 
 ---
@@ -304,7 +314,8 @@ BIFAS/
 git clone https://github.com/p04pranav/BIFAS.git
 cd BIFAS
 
-# Install dependencies
+# Install backend dependencies
+cd Backend
 pip install -r requirements.txt
 
 # Set up environment
@@ -312,7 +323,7 @@ cp .env.example .env
 # Edit .env and add your Google AI Studio API key
 ```
 
-Optional settings in `.env`:
+Optional settings in `Backend/.env`:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -321,18 +332,48 @@ Optional settings in `.env`:
 | `BIFAS_RPM` | `15` | Requests per minute per model |
 | `BIFAS_DAILY_LIMIT` | `500` | Primary-model requests per day (resets midnight Pacific) |
 | `BIFAS_REQUEST_TIMEOUT_MS` | `90000` | Per-request HTTP timeout |
+| `BIFAS_PORT` | `5050` | Port for `python server.py` |
+| `BIFAS_CORS_ORIGINS` | `*` | Allowed origins if the frontend is hosted elsewhere |
+| `BIFAS_MAX_CONCURRENT_RUNS` | `2` | Analyses allowed at once (protects the per-minute quota) |
 
 ### Run
 
 ```bash
-streamlit run app.py
+cd Backend
+uvicorn server:app --port 5050      # or: python server.py
+```
+
+Open **http://localhost:5050** — the backend serves the frontend too, so that one command runs everything.
+
+To host `Frontend/` somewhere else, open it with `?api=http://your-backend:5050` (or set `window.BIFAS_API` in `index.html`) and set `BIFAS_CORS_ORIGINS` on the backend.
+
+### API
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/health` | `{"status": "ok"}` |
+| `GET /api/meta` | Depth options, today's model usage, example queries |
+| `GET /api/analyze?query=…&depth=Quick\|Standard\|Deep` | Runs an analysis and streams Server-Sent Events: `phase`, `data`, `tasks`, `agent`, `report`, `audit`, then `done` (full result) or `error`. Returns 422 for invalid input and 429 when too many analyses are running. |
+
+```bash
+curl -N "http://localhost:5050/api/analyze?query=Gold%20vs%20the%20dollar&depth=Quick"
+```
+
+### Tests
+
+```bash
+cd Backend
+pip install -r requirements-dev.txt
+pytest -q
 ```
 
 ---
 
 ## 🎮 Usage
 
-1. **Launch** the app — opens a dark terminal-styled interface
+![BIFAS research desk](docs/screenshot.png)
+
+1. **Open** http://localhost:5050 (designed for desktop and laptop screens)
 2. **Select depth:**
 
    | Depth | Agents | Time | Best For |
@@ -342,9 +383,9 @@ streamlit run app.py
    | 🔬 **Deep** | 12 | ~60s | Comprehensive research |
 
 3. **Enter a query** — natural language, any financial domain
-4. **Click** "Initialize BIFAS Sprint"
-5. **Watch** agents execute in parallel with live data injection
-6. **Review** the synthesized executive report with real market numbers
+4. **Click** "Run analysis" (or press Ctrl + Enter)
+5. **Watch** the progress timeline and each analyst finish in real time — expand any analyst to read their full notes
+6. **Review** the briefing, stamped Approved or Rejected by the auditor, and copy or download it as Markdown
 
 ### Example Queries
 
@@ -373,7 +414,7 @@ streamlit run app.py
 
 ### v7.0 (Gemini 3.5 Flash Lite)
 
-**Offline:** 48/48 pytest tests pass (`pip install -r requirements-dev.txt && pytest -q`) — no API key or quota needed.
+**Offline:** 60/60 pytest tests pass (`cd Backend && pip install -r requirements-dev.txt && pytest -q`) — no API key or quota needed.
 
 **Live:** 6/6 runs approved by the auditor, all on Flash Lite with no fallback or guardrails triggered.
 
@@ -419,6 +460,14 @@ See [TEST_REPORT.md](TEST_REPORT.md) and [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md
 
 ## 📋 Changelog
 
+### v7.1 — Backend / Frontend Split
+
+| Change | Description |
+|--------|-------------|
+| **Backend/** | Pipeline, tests and config moved under `Backend/`; new FastAPI server with a live SSE progress stream |
+| **Frontend/** | New dark HTML/CSS/JS research-desk dashboard replaces Streamlit — live analyst progress, audit stamp, correctly rendered `$` amounts, copy/download |
+| **Streamlit removed** | `app.py` and the `streamlit` dependency are gone |
+
 ### v7.0 — Gemini 3.5 Flash Lite + Reliability Fixes
 
 | Change | Description |
@@ -432,7 +481,7 @@ See [TEST_REPORT.md](TEST_REPORT.md) and [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md
 | **Commodity Data** | Gold/oil/etc. agents now receive their own price and technicals |
 | **Indicator Fix** | MACD signal/histogram and Bollinger upper/lower were swapped |
 | **UI** | Report rendered as markdown, full agent output, model + quota display |
-| **Tests** | 48 offline pytest tests with a mocked LLM |
+| **Tests** | 60 offline pytest tests (mocked LLM + API server) |
 
 ### v5.1 — Resilience & Reliability
 
