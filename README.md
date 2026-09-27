@@ -8,15 +8,15 @@
 
 ![Python](https://img.shields.io/badge/Python_3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)
-![Gemma 4](https://img.shields.io/badge/Gemma_4_31B-4285F4?style=flat-square&logo=google&logoColor=white)
+![Gemini 3.5 Flash Lite](https://img.shields.io/badge/Gemini_3.5_Flash_Lite-4285F4?style=flat-square&logo=google&logoColor=white)
 ![License](https://img.shields.io/badge/License-Proprietary-red?style=flat-square)
 ![APIs](https://img.shields.io/badge/Data_Sources-7_Keyless_APIs-00C853?style=flat-square)
-![Tests](https://img.shields.io/badge/Tests-9%2F9_Passed-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-48_unit_%2B_6_live_passed-brightgreen?style=flat-square)
 ![Cost](https://img.shields.io/badge/Cost-%240-gold?style=flat-square)
 
 <br/>
 
-*A dynamic multi-agent system that decomposes financial queries into independent micro-tasks, fetches real-time market data from **7 keyless public APIs** (stocks, crypto, forex, commodities), executes analysis in parallel using specialized AI agents powered by **Google Gemma 4 31B**, and synthesizes results into executive-grade reports — all for **\$0**.*
+*A dynamic multi-agent system that decomposes financial queries into independent micro-tasks, fetches real-time market data from **7 keyless public APIs** (stocks, crypto, forex, commodities), executes analysis in parallel using specialized AI agents powered by **Google Gemini 3.5 Flash Lite** (with automatic Gemma 4 26B fallback), and synthesizes results into executive-grade reports — all for **\$0**.*
 
 </div>
 
@@ -28,11 +28,12 @@
 |---|-----------|--------|
 | ⚡ | **Sprint Architecture** | Parallel agent execution — completes analysis in ~3-5 minutes |
 | 📡 | **7 Keyless APIs** | Live market data — agents analyze real numbers, not hallucinations |
-| 💸 | **100% Free** | Google AI free tier (Gemma 4 31B), no paid API keys required |
+| 💸 | **100% Free** | Google AI free tier (Gemini 3.5 Flash Lite, Gemma 4 fallback), no paid API keys required |
 | 🎯 | **Auto Domain Detection** | Queries auto-classified as stocks / crypto / forex / commodities |
 | 💉 | **Per-Ticker Injection** | Each agent sees only their assigned asset's real data |
 | 📈 | **MVRV Approximation** | VWAP-based proxy with ~70% accuracy label for crypto valuations |
-| 🛡️ | **Rate Limiter** | Built-in 15 req/min throttle respects free-tier API quotas |
+| 🛡️ | **Quota Aware** | 15 req/min throttle + 500 req/day counter; switches to Gemma 4 26B when the daily quota runs out |
+| 🧾 | **Structured Output** | Orchestrator tasks and audit verdicts come back as typed JSON — no regex scraping |
 
 ---
 
@@ -135,13 +136,13 @@ flowchart LR
     end
 
     subgraph Depth["⚙️ Depth Config"]
-        Quick["⚡ Quick<br/>3 agents · ~50s"]
-        Standard["📊 Standard<br/>6 agents · ~55s"]
+        Quick["⚡ Quick<br/>3 agents · ~25s"]
+        Standard["📊 Standard<br/>6 agents · ~35s"]
         Deep["🔬 Deep<br/>12 agents · ~60s"]
     end
 
     subgraph Execution["🚀 ThreadPoolExecutor"]
-        P["Parallel LLM Calls<br/>+ Rate Limiter (15/min)<br/>+ Retry (2 attempts)<br/>+ 5-min Hard Timeout"]
+        P["Parallel LLM Calls<br/>+ Rate Limiter (15/min)<br/>+ Retry (2 attempts)<br/>+ Gemma fallback on 429<br/>+ 5-min Hard Timeout"]
     end
 
     subgraph Output["📋 Output"]
@@ -184,10 +185,11 @@ graph TD
     APP -->|"DEPTH_CONFIG"| AGT
     ENG -->|"prompts"| AGT
     ENG -->|"fetch data"| DAT
-    ENG -->|"LLM client"| CFG
+    ENG -->|"generate()"| LLM["🧭 llm.py<br/>Limits + Fallback"]
+    LLM -->|"client"| CFG
 
     subgraph External["☁️ External Services"]
-        GEMMA["🧠 Google Gemma 4 31B"]
+        GEMMA["🧠 Gemini 3.5 Flash Lite<br/>(fallback: Gemma 4 26B A4B)"]
         APIS["📡 7 Keyless APIs"]
     end
 
@@ -247,7 +249,7 @@ graph TD
 | Component | Technology |
 |-----------|------------|
 | **UI** | Streamlit |
-| **LLM** | Google **Gemma 4 31B** (free tier, \$0) |
+| **LLM** | Google **Gemini 3.5 Flash Lite** (free tier, \$0) · fallback **Gemma 4 26B A4B** |
 | **Stock/Forex/Commodity Data** | yfinance |
 | **Crypto OHLCV** | Kraken API |
 | **Crypto Market Data** | CoinGecko API |
@@ -259,6 +261,8 @@ graph TD
 | **Parallelism** | ThreadPoolExecutor |
 | **Language** | Python 3.10+ |
 | **Config** | python-dotenv |
+| **Structured Output** | Pydantic schemas |
+| **Tests** | pytest (offline, mocked LLM) |
 
 ---
 
@@ -268,13 +272,16 @@ graph TD
 BIFAS/
 ├── app.py                 # Streamlit UI — dark terminal aesthetic
 ├── engine.py              # Sprint architecture — orchestration, parallel execution, synthesis
+├── llm.py                 # Model calls — rate/daily limits, retries, Gemma fallback, structured output
 ├── bifas_agents.py        # Prompt templates + depth config (Quick/Standard/Deep)
 ├── data_fetcher.py        # 7 API integrations, domain detection, ticker extraction, technicals
-├── config.py              # Google AI client initialization + env loader
+├── config.py              # Google AI client, model names and limits from env
 ├── requirements.txt       # Python dependencies
+├── requirements-dev.txt   # + pytest
+├── tests/                 # Offline pytest suite (no API calls)
 ├── .env.example           # Environment variable template
 ├── .gitignore             # Ignored files
-├── TEST_REPORT.md         # Test results summary (9/9 passed)
+├── TEST_REPORT.md         # Test results (v7.0 + historical v5/v6)
 ├── RAW_TEST_OUTPUT.md     # Full raw test output (9 runs)
 └── README.md              # This file
 ```
@@ -305,6 +312,16 @@ cp .env.example .env
 # Edit .env and add your Google AI Studio API key
 ```
 
+Optional settings in `.env`:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `BIFAS_MODEL` | `gemini-3.5-flash-lite` | Primary model |
+| `BIFAS_FALLBACK_MODEL` | `gemma-4-26b-a4b-it` | Used when the primary's quota is exhausted |
+| `BIFAS_RPM` | `15` | Requests per minute per model |
+| `BIFAS_DAILY_LIMIT` | `500` | Primary-model requests per day (resets midnight Pacific) |
+| `BIFAS_REQUEST_TIMEOUT_MS` | `90000` | Per-request HTTP timeout |
+
 ### Run
 
 ```bash
@@ -320,8 +337,8 @@ streamlit run app.py
 
    | Depth | Agents | Time | Best For |
    |-------|--------|------|----------|
-   | ⚡ **Quick** | 3 | ~50s | Fast overviews |
-   | 📊 **Standard** | 6 | ~55s | Balanced analysis |
+   | ⚡ **Quick** | 3 | ~25s | Fast overviews |
+   | 📊 **Standard** | 6 | ~35s | Balanced analysis |
    | 🔬 **Deep** | 12 | ~60s | Comprehensive research |
 
 3. **Enter a query** — natural language, any financial domain
@@ -344,15 +361,30 @@ streamlit run app.py
 
 | Depth | Agents | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Total LLM | Time |
 |-------|--------|---------|---------|---------|---------|---------|-----------|------|
-| ⚡ Quick | 3 | ~3s (data) | 1 LLM | 3 parallel | 1 LLM | 1 LLM | 6 + data | ~3 min |
-| 📊 Standard | 6 | ~3s (data) | 1 LLM | 6 parallel | 1 LLM | 1 LLM | 9 + data | ~4 min |
-| 🔬 Deep | 12 | ~3s (data) | 1 LLM | 12 parallel | 1 LLM | 1 LLM | 15 + data | ~5 min |
+| ⚡ Quick | 3 | ~3s (data) | 1 LLM | 3 parallel | 1 LLM | 1 LLM | 6 + data | ~25s |
+| 📊 Standard | 6 | ~3s (data) | 1 LLM | 6 parallel | 1 LLM | 1 LLM | 9 + data | ~35s |
+| 🔬 Deep | 12 | ~3s (data) | 1 LLM | 12 parallel | 1 LLM | 1 LLM | 15 + data | ~60s |
 
-> ⏱️ Times include built-in rate limiting (15 req/min) to respect free-tier API quotas.
+> ⏱️ Times measured on Gemini 3.5 Flash Lite and include the 15 req/min rate limit. With the 500 req/day free quota that is roughly 80 Quick or 33 Deep runs per day before BIFAS switches to the (slower) Gemma 4 26B fallback. The pipeline always returns within 5 minutes.
 
 ---
 
 ## ✅ Test Results
+
+### v7.0 (Gemini 3.5 Flash Lite)
+
+**Offline:** 48/48 pytest tests pass (`pip install -r requirements-dev.txt && pytest -q`) — no API key or quota needed.
+
+**Live:** 6/6 runs approved by the auditor, all on Flash Lite with no fallback or guardrails triggered.
+
+| Domain | Depth | Agents | Time | Audit |
+|--------|-------|--------|------|-------|
+| 📈 Stocks | Quick | 3/3 | 23.0s | ✅ APPROVED |
+| ₿ Crypto | Quick | 3/3 | 24.0s | ✅ APPROVED |
+| 💱 Forex | Quick | 3/3 | 24.3s | ✅ APPROVED |
+| 🥇 Gold + Oil | Quick | 3/3 | 23.7s | ✅ APPROVED |
+| ₿ Crypto | Standard | 6/6 | 36.2s | ✅ APPROVED |
+| 📈 Stocks | Deep | 12/12 | 61.2s | ✅ APPROVED |
 
 ### v5.0 (Sprint + Live Data) — 9/9 PASSED
 
@@ -386,6 +418,21 @@ See [TEST_REPORT.md](TEST_REPORT.md) and [RAW_TEST_OUTPUT.md](RAW_TEST_OUTPUT.md
 ---
 
 ## 📋 Changelog
+
+### v7.0 — Gemini 3.5 Flash Lite + Reliability Fixes
+
+| Change | Description |
+|--------|-------------|
+| **New Primary Model** | Gemini 3.5 Flash Lite — ~25s Quick runs (was ~6 min on Gemma) |
+| **Gemma Fallback** | Automatic switch to Gemma 4 26B A4B on 429 / daily quota exhaustion, shown in the UI |
+| **Quota Tracking** | 15 RPM limiter per model + persisted 500/day counter |
+| **Auditor Fix** | Typed APPROVED/REJECTED verdict on the full report (was leaking model reasoning) |
+| **Real Hard Timeout** | Stuck agents are abandoned; runs always return within 300s |
+| **Domain Detection** | Whole-word matching ('v', 'eth', 'sol' no longer match inside words) |
+| **Commodity Data** | Gold/oil/etc. agents now receive their own price and technicals |
+| **Indicator Fix** | MACD signal/histogram and Bollinger upper/lower were swapped |
+| **UI** | Report rendered as markdown, full agent output, model + quota display |
+| **Tests** | 48 offline pytest tests with a mocked LLM |
 
 ### v5.1 — Resilience & Reliability
 

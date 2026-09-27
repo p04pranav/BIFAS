@@ -1,4 +1,37 @@
-# BIFAS Test Report — Sprint Architecture with Live Market Data
+# BIFAS Test Report
+
+## v7.0 — Gemini 3.5 Flash Lite
+
+**Date:** September 27, 2026
+**Model:** `gemini-3.5-flash-lite` (fallback `gemma-4-26b-a4b-it`)
+**Environment:** Python 3.13, Linux
+
+### Offline suite
+
+`pytest -q` → **48 passed** (about 4s, no API key or network needed). Covers domain and ticker detection, indicator column mapping, per-agent data routing, LLM thought and truncation handling, 429 fallback, daily-cap fallback, 5xx retry, rate limiting, auditor verdicts, and the hard timeout with a stuck agent.
+
+### Live runs
+
+| # | Query | Depth | Agents | Time | Model | Audit |
+|---|-------|-------|--------|------|-------|-------|
+| 1 | NVDA, AAPL, MSFT outlook | Quick | 3/3 | 23.0s | Flash Lite | ✅ APPROVED |
+| 2 | Bitcoin & Ethereum trends | Quick | 3/3 | 24.0s | Flash Lite | ✅ APPROVED |
+| 3 | EUR/USD, GBP/USD, USD/JPY | Quick | 3/3 | 24.3s | Flash Lite | ✅ APPROVED |
+| 4 | Gold & crude oil vs dollar | Quick | 3/3 | 23.7s | Flash Lite | ✅ APPROVED |
+| 5 | NVDA, AAPL, MSFT outlook | Deep | 12/12 | 61.2s | Flash Lite | ✅ APPROVED |
+| 6 | Bitcoin & Ethereum trends | Standard | 6/6 | 36.2s | Flash Lite | ✅ APPROVED |
+
+No guardrails were triggered. Every agent received its own asset's data (for example, the gold agent got only GC=F data). Reports cited 24–49 real figures each.
+
+**Before (v6.0, Gemma 4 31B), same stocks Quick query:** 356s. It overran the 300s limit without a warning, and the audit returned the model's reasoning instead of a verdict.
+
+**Fallback:** forcing the quota to 0 switched the run to Gemma and the hard timeout held (returned at 240s). Gemma 4 31B was too slow to finish any agent in that window, so the default fallback is now Gemma 4 26B A4B, which was about 4× faster per call. The fallback switching logic is covered by the offline tests; a live end-to-end fallback run on 26B was not completed.
+
+---
+
+# Historical: v5.0
+
+## Sprint Architecture with Live Market Data
 
 **Date:** June 8, 2026  
 **Version:** 5.0.0 — Sprint Architecture + Live Data Integration  

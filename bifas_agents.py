@@ -71,7 +71,7 @@ Return status APPROVED or REJECTED, and a one-sentence reason.
 Note: Some on-chain data may only be available for Bitcoin. Do not penalize the report for missing data on non-BTC assets that is unavailable from public APIs."""
 
 DEPTH_CONFIG = {
-    "Quick": {"max_agents": 3, "description": "Fast analysis, 3 agents, ~1 min"},
-    "Standard": {"max_agents": 6, "description": "Balanced analysis, 6 agents, ~1 min"},
-    "Deep": {"max_agents": 12, "description": "Thorough analysis, 12 agents, ~1 min"}
+    "Quick": {"max_agents": 3, "description": "Fast analysis, 3 agents, ~25s"},
+    "Standard": {"max_agents": 6, "description": "Balanced analysis, 6 agents, ~35s"},
+    "Deep": {"max_agents": 12, "description": "Thorough analysis, 12 agents, ~60s"}
 }
