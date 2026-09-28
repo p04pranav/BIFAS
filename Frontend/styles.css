@@ -184,7 +184,8 @@ body[data-view="start"] .thread, body[data-view="start"] .composer-slot--thread 
   display: flex; flex-direction: column; gap: 0.9rem;
 }
 /* Under a thread the composer becomes a compact bar pinned to the bottom of the stage. */
-.composer-slot--thread { position: sticky; bottom: 1rem; z-index: 5; }
+/* The slot's own background fills the gap under the bar so the report doesn't show through it. */
+.composer-slot--thread { position: sticky; bottom: 0; z-index: 5; padding-bottom: 1rem; background: var(--ink); }
 .composer-slot--thread .composer {
   flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem;
   padding: 0.65rem; box-shadow: 0 -12px 32px rgba(13, 21, 32, 0.9);
