@@ -546,7 +546,18 @@ document.addEventListener("keydown", (e) => {
 window.addEventListener("hashchange", () => {
   const params = new URLSearchParams(location.hash.slice(1));
   const sid = params.get("s");
-  if (sid && (!state.session || state.session.id !== sid)) openSession(sid, params.get("b"));
+  const bid = params.get("b");
+  if (sid && (!state.session || state.session.id !== sid)) {
+    openSession(sid, bid);
+    return;
+  }
+  // Same session, another briefing: open it in place.
+  const target = bid && state.views.find((v) => v.data.id === bid);
+  if (target && target !== state.focused) {
+    state.views.forEach((v) => v.setExpanded(v === target));
+    showDetails(target);
+    target.el.scrollIntoView({ block: "start" });
+  }
 });
 
 // ---------- start ----------
