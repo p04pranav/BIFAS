@@ -197,11 +197,11 @@ body[data-view="start"] .thread, body[data-view="start"] .composer-slot--thread 
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 }
 .composer-slot--thread textarea {
-  flex: 1 1 320px; min-height: 46px; height: 46px; resize: none; padding: 0.6rem 0.85rem;
+  flex: 1 1 240px; min-height: 46px; height: 46px; resize: none; padding: 0.6rem 0.85rem;
   transition: height 150ms var(--ease), border-color 150ms var(--ease);
 }
 .composer-slot--thread textarea:focus, .composer-slot--thread textarea.has-text { height: 5.5rem; }
-.composer-slot--thread .controls { flex: none; flex-wrap: nowrap; gap: 0.6rem; }
+.composer-slot--thread .controls { flex: none; flex-wrap: nowrap; gap: 0.6rem; margin-left: auto; }
 .composer-slot--thread .depth-option label { min-height: 38px; justify-content: center; padding: 0 0.7rem; }
 .composer-slot--thread .run { min-height: 46px; min-width: 132px; }
 .composer-slot--thread .form-error { flex-basis: 100%; }
