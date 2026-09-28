@@ -15,9 +15,9 @@ The UI/UX redesign (sessions, market snapshot, preview, report reading) is commi
 | Sessions rail and deep links | – | ✅ | ❌ |
 | Market snapshot tiles | – | ✅ hover, keyboard, table | ❌ |
 | Preview while typing | – | ✅ | ❌ |
-| Section tabs and summary lead | – | ❌ **not tested at all** | ❌ |
-| Analyst drawer | – | ❌ **not tested at all** | ❌ |
-| Cancel and Try again (UI) | – | ❌ | ❌ |
+| Section tabs and summary lead | – | ✅ | ❌ |
+| Analyst drawer | – | ✅ | ❌ |
+| Cancel and Try again (UI) | – | ✅ | ❌ |
 
 ## 1. Offline tests
 
@@ -31,35 +31,37 @@ pytest -q          # expect 101 passed
 
 Start the app with `cd Backend && uvicorn server:app --port 5050` and open http://localhost:5050.
 
+Done on 2026-09-28 with Playwright (headless Chromium) against a scripted backend: 67/67 checks at both sizes. The run turned up five layout and navigation bugs, each fixed in its own commit: the follow-up composer wrapped onto two rows at 1280px, the Run button wrapped to the left on the start screen, report text showed through under the floating composer, banners sat far from their run (the offline banner was below the fold), and `#b=` links within the open session were ignored.
+
 - **Section tabs**
-  - [ ] Tabs appear for a report with 2 or more sections.
-  - [ ] Clicking a tab scrolls to that section.
-  - [ ] The active tab follows scrolling.
-  - [ ] The tabs stay stuck under the masthead.
-  - [ ] Scrolling is instant when reduced motion is on.
+  - [x] Tabs appear for a report with 2 or more sections.
+  - [x] Clicking a tab scrolls to that section.
+  - [x] The active tab follows scrolling.
+  - [x] The tabs stay stuck under the masthead.
+  - [x] Scrolling is instant when reduced motion is on.
 - **Summary lead**
-  - [ ] The executive summary shows as the lead block with the amber rule.
-  - [ ] The duplicated "BIFAS Executive Report: …" title is gone.
-  - [ ] Downloaded `.md` files still contain the full text.
+  - [x] The executive summary shows as the lead block with the amber rule.
+  - [x] The duplicated "BIFAS Executive Report: …" title is gone.
+  - [x] Downloaded `.md` files still contain the full text.
 - **Analyst drawer**
-  - [ ] Clicking a finished analyst opens the drawer.
-  - [ ] Previous and next move between analysts.
-  - [ ] Esc, the close button and a click on the backdrop all close it.
-  - [ ] Tab stays inside the drawer while it's open.
-  - [ ] Focus returns to the analyst row when it closes.
-  - [ ] The page behind doesn't scroll while it's open.
+  - [x] Clicking a finished analyst opens the drawer.
+  - [x] Previous and next move between analysts.
+  - [x] Esc, the close button and a click on the backdrop all close it.
+  - [x] Tab stays inside the drawer while it's open.
+  - [x] Focus returns to the analyst row when it closes.
+  - [x] The page behind doesn't scroll while it's open.
 - **Cancel and Try again**
-  - [ ] Cancel during a run stops it and shows the "Analysis cancelled" banner.
-  - [ ] Nothing is saved to `Memory/`.
-  - [ ] Try again reruns the same question.
+  - [x] Cancel during a run stops it and shows the "Analysis cancelled" banner.
+  - [x] Nothing is saved to `Memory/`.
+  - [x] Try again reruns the same question.
 - **Re-run the earlier flows after these commits:**
-  - [ ] sessions (create, follow-up, switch, rename, delete, reload with `#s=…&b=…`)
-  - [ ] snapshot tiles (hover, arrow keys, table view)
-  - [ ] preview while typing
+  - [x] sessions (create, follow-up, switch, rename, delete, reload with `#s=…&b=…`)
+  - [x] snapshot tiles (hover, arrow keys, table view)
+  - [x] preview while typing
 - **Quality:**
-  - [ ] no console errors
-  - [ ] no horizontal scroll
-  - [ ] visible focus on every control
+  - [x] no console errors
+  - [x] no horizontal scroll
+  - [x] visible focus on every control
 - [ ] Palette sanity check: run the dataviz validator on `#239E96,#E2653E` against surface `#142031` in dark mode (it passed during development).
 
 ## 3. Live runs (real model, about 25–30 of the 500 daily requests)
