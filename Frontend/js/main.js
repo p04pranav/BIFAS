@@ -435,6 +435,7 @@ async function runAnalysis(query, depth) {
   const onEvent = (type, data) => {
     switch (type) {
       case "session":
+        if (data.created) run.createdSession = data.id;
         if (!state.session || state.session.id !== data.id) {
           state.session = { id: data.id, title: data.title, briefings: [] };
           renderMastheadTitle();
@@ -487,8 +488,17 @@ async function runAnalysis(query, depth) {
     setRunning(false);
     preview.resetContext();
     preview.update();
-    // A cancelled or failed first run leaves no saved session behind.
-    if (!run.view.data.id && state.session && !state.session.briefings.length) refreshSessions();
+    // A cancelled or failed first run leaves no saved session behind (the server deletes it),
+    // so the next question must start a new session instead of pointing at the deleted one.
+    if (!run.view.data.id && state.session && !state.session.briefings.length) {
+      if (run.createdSession && state.session.id === run.createdSession) {
+        state.session = null;
+        setHash(null, null);
+        renderMastheadTitle();
+        preview.update();
+      }
+      refreshSessions();
+    }
   }
 }
 
