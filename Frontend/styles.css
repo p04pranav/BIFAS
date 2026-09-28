@@ -249,7 +249,7 @@ textarea:focus-visible { border-color: var(--amber); box-shadow: var(--focus); b
 .depth-option input:checked + label .depth-name { color: var(--amber); }
 .depth-option input:focus-visible + label { box-shadow: var(--focus); }
 
-.run-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; }
+.run-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; margin-left: auto; }
 .run {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
   min-height: 46px; min-width: 164px; padding: 0 1.4rem; border: 0; border-radius: var(--radius);
